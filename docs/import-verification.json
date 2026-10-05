@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-05",
+  "build_plans": {
+    "targets": 23,
+    "result": "passed",
+    "scope": "ComfyUI-only target selection, repository-local contexts, linux/amd64 platforms, LTX profiles, 4K dependency, generic-only default"
+  },
+  "source_tests": {
+    "generic_download_patch": 7,
+    "ltx_profiles_models_workflow_contracts": 43,
+    "result": "passed"
+  },
+  "helper_checks": {
+    "powershell_syntax_and_tag_override": "passed"
+  },
+  "publication_checks": {
+    "model_weights_and_credentials": "excluded",
+    "credential_scan": "passed"
+  },
+  "docker_images_built_during_import": false,
+  "gpu_inference_tested_during_import": false,
+  "note": "Historical service verification reports describe earlier source-project runs, not new verification of this suite import."
+}

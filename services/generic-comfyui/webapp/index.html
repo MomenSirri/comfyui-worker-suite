@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Comfy Serverless Image to Video</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Comfy image to video</h1>
+          <p>Send a ComfyUI API workflow to a RunPod serverless endpoint and collect video output links.</p>
+        </div>
+        <button id="loadExample" type="button">Load example payload</button>
+      </section>
+
+      <form id="jobForm" class="workspace">
+        <section class="panel connection">
+          <h2>Endpoint</h2>
+          <label>
+            RunPod endpoint ID
+            <input id="endpointId" name="endpointId" autocomplete="off" placeholder="abc123endpoint" required />
+          </label>
+          <label>
+            RunPod API key
+            <input id="apiKey" name="apiKey" type="password" autocomplete="off" placeholder="rpa_..." required />
+          </label>
+          <label>
+            Comfy API key for API nodes
+            <input id="comfyApiKey" name="comfyApiKey" type="password" autocomplete="off" placeholder="Optional" />
+          </label>
+          <label class="checkbox">
+            <input id="rememberSettings" type="checkbox" />
+            Remember endpoint on this browser
+          </label>
+        </section>
+
+        <section class="panel workflow">
+          <div class="section-head">
+            <h2>Workflow</h2>
+            <label class="file-button">
+              Import JSON
+              <input id="workflowFile" type="file" accept=".json,application/json" />
+            </label>
+          </div>
+          <textarea id="workflowJson" spellcheck="false" placeholder="Paste Workflow > Export (API) JSON here" required></textarea>
+        </section>
+
+        <section class="panel inputs">
+          <h2>Inputs</h2>
+          <div class="grid-2">
+            <label>
+              Prompt
+              <textarea id="prompt" rows="5" placeholder="A cinematic shot..."></textarea>
+            </label>
+            <label>
+              Negative prompt
+              <textarea id="negativePrompt" rows="5" placeholder="Optional"></textarea>
+            </label>
+          </div>
+          <div class="grid-3">
+            <label>
+              Prompt node ID
+              <input id="promptNodeId" placeholder="Optional, e.g. 6" />
+            </label>
+            <label>
+              Negative node ID
+              <input id="negativePromptNodeId" placeholder="Optional" />
+            </label>
+            <label>
+              Input image filename
+              <input id="imageName" value="input_image.png" />
+            </label>
+          </div>
+          <div class="media-row">
+            <label class="file-drop">
+              <span>Upload image</span>
+              <input id="imageFile" type="file" accept="image/*" />
+            </label>
+            <span class="or">or</span>
+            <label class="grow">
+              Image URL
+              <input id="imageUrl" placeholder="https://your-bucket.s3.amazonaws.com/input.png?...presigned..." />
+            </label>
+          </div>
+          <div id="preview" class="preview empty">No image selected</div>
+        </section>
+
+        <section class="actions">
+          <button id="submitButton" type="submit">Run image to video</button>
+          <button id="copyPayload" type="button">Copy payload</button>
+          <button id="clearResults" type="button">Clear</button>
+          <span id="statusText"></span>
+        </section>
+      </form>
+
+      <section class="results">
+        <div class="panel">
+          <h2>Videos</h2>
+          <div id="videoResults" class="video-results empty">No videos yet</div>
+        </div>
+        <div class="panel">
+          <h2>Response</h2>
+          <pre id="responseJson">{}</pre>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

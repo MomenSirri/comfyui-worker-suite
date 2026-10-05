@@ -1,0 +1,27 @@
+name: Check source and build catalog
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate supported build configurations
+        run: python scripts/validate_catalog.py
+      - name: Generic worker download patch tests
+        working-directory: services/generic-comfyui
+        run: python -m unittest tests.test_patch_comfy_api_download
+      - name: LTX profiles, manifests, and workflow contracts
+        working-directory: services/ltx25
+        run: python -m unittest tests.test_profiles tests.test_model_bundle tests.test_workflow_contract

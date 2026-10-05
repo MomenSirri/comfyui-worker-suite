@@ -1,0 +1,37 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.secrets/
+hf-token*
+*.pem
+*.key
+
+# Model weights and large build outputs (metadata JSON remains in Git)
+*.safetensors
+*.gguf
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.bin
+models.zip
+*.tar
+*.zip
+artifacts/
+output/
+input/
+data/
+simulated_uploaded/
+
+# Developer and runtime caches
+.idea/
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+*.pid
+.DS_Store

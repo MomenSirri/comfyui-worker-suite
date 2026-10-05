@@ -1,0 +1,14 @@
+node_modules
+.changeset
+.git
+.github
+.env
+.env.*
+!.env.example
+.secrets
+.venv
+venv
+**/__pycache__
+**/*.pyc
+*.log
+*.pid

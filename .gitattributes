@@ -1,0 +1,11 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+*.hcl text eol=lf
+Dockerfile* text eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.mp4 binary
+*.md whitespace=-blank-at-eol

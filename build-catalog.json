@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "name": "base",
+      "service": "image-workflows",
+      "purpose": "Shared ComfyUI runtime foundation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-base"
+      ]
+    },
+    {
+      "name": "base-cuda12-8-1",
+      "service": "image-workflows",
+      "purpose": "ComfyUI runtime foundation for CUDA 12.8.1",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-base-cuda12.8.1"
+      ]
+    },
+    {
+      "name": "enhance",
+      "service": "image-workflows",
+      "purpose": "General image enhancement full worker",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/general-enhancement:latest"
+      ]
+    },
+    {
+      "name": "enhance-core",
+      "service": "image-workflows",
+      "purpose": "General image enhancement intermediate core",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/general-enhancement:core-latest"
+      ]
+    },
+    {
+      "name": "flux1-dev",
+      "service": "image-workflows",
+      "purpose": "FLUX.1 dev generation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-flux1-dev"
+      ]
+    },
+    {
+      "name": "flux1-dev-fp8",
+      "service": "image-workflows",
+      "purpose": "FLUX.1 dev FP8 generation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-flux1-dev-fp8"
+      ]
+    },
+    {
+      "name": "flux1-schnell",
+      "service": "image-workflows",
+      "purpose": "FLUX.1 schnell generation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-flux1-schnell"
+      ]
+    },
+    {
+      "name": "flux2-klein",
+      "service": "image-workflows",
+      "purpose": "FLUX.2 Klein image generation/editing, CUDA 12.6",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/flux2-klein9b:v04-cuda12.6"
+      ]
+    },
+    {
+      "name": "flux2-klein-cuda12-8-1",
+      "service": "image-workflows",
+      "purpose": "FLUX.2 Klein image generation/editing, CUDA 12.8.1",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/flux2-klein9b:v04"
+      ]
+    },
+    {
+      "name": "generic-comfyui",
+      "service": "generic-comfyui",
+      "purpose": "Model-free ComfyUI worker from the sibling worker-comfyui repository",
+      "context": "services/generic-comfyui",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/comfyui-generic:dev-cu128"
+      ]
+    },
+    {
+      "name": "ltx25-4k",
+      "service": "ltx25",
+      "purpose": "ComfyUI 4K qualification overlay on the complete INT8 bundle",
+      "context": "services/ltx25",
+      "dockerfile": "Dockerfile.4k",
+      "default_tags": [
+        "momensirribrick/worker-comfyui-ltx25:dev-4k"
+      ]
+    },
+    {
+      "name": "ltx25-bf16",
+      "service": "ltx25",
+      "purpose": "Complete LTX 2.5 BF16 worker with its own model profile",
+      "context": "services/ltx25",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui-ltx25:dev-bf16"
+      ]
+    },
+    {
+      "name": "ltx25-cq-v2",
+      "service": "ltx25",
+      "purpose": "LTX CQ Enhancer V2 with its dedicated models and workflow catalog",
+      "context": "services/ltx25",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui-ltx25:dev-cq-v2"
+      ]
+    },
+    {
+      "name": "ltx25-int8",
+      "service": "ltx25",
+      "purpose": "Complete LTX 2.5 INT8 generation and enhancement worker",
+      "context": "services/ltx25",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui-ltx25:dev-int8"
+      ]
+    },
+    {
+      "name": "refrence_gen_sdxl_flux2_klein",
+      "service": "image-workflows",
+      "purpose": "SDXL and FLUX.2 Klein reference-generation bundle",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-refrence_gen_sdxl_flux2_klein"
+      ]
+    },
+    {
+      "name": "refrence_gen_sdxl_flux2_klein-cuda12-8-1",
+      "service": "image-workflows",
+      "purpose": "Reference-generation bundle, CUDA 12.8.1",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-refrence_gen_sdxl_flux2_klein-cuda12.8.1"
+      ]
+    },
+    {
+      "name": "sd3",
+      "service": "image-workflows",
+      "purpose": "Stable Diffusion 3 generation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-sd3"
+      ]
+    },
+    {
+      "name": "sdxl",
+      "service": "image-workflows",
+      "purpose": "Stable Diffusion XL generation",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-sdxl"
+      ]
+    },
+    {
+      "name": "seedvr",
+      "service": "image-workflows",
+      "purpose": "SeedVR restoration bundle, original configuration",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-seedvr"
+      ]
+    },
+    {
+      "name": "seedvr-cuda12-8-1",
+      "service": "image-workflows",
+      "purpose": "SeedVR restoration bundle, CUDA 12.8.1",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/seedvr:v01"
+      ]
+    },
+    {
+      "name": "seedvr-cuda13-0-2",
+      "service": "image-workflows",
+      "purpose": "SeedVR with Qwen vision support, CUDA 13.0.2",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/seedvr:v05"
+      ]
+    },
+    {
+      "name": "seedvr-runpod-cuda12-8-1",
+      "service": "image-workflows",
+      "purpose": "SeedVR with Qwen vision support, CUDA 12.8.1",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/seedvr:v06"
+      ]
+    },
+    {
+      "name": "z-image-turbo",
+      "service": "image-workflows",
+      "purpose": "Z-Image Turbo generation and control model bundle",
+      "context": "services/image-workflows",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirribrick/worker-comfyui:latest-z-image-turbo"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "service": "image-workflows",
+  "relative_to": "services/image-workflows",
+  "files": [
+    "models/LLM/GGUF/Qwen/Qwen3-VL-4B-Instruct-GGUF/Qwen3VL-4B-Instruct-Q8_0.gguf",
+    "models/LLM/GGUF/Qwen/Qwen3-VL-4B-Instruct-GGUF/mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+    "models/SEEDVR2/seedvr2_ema_7b_sharp_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+    "models/diffusion_models/flux-2-klein-9b-fp8.safetensors",
+    "models/loras/FLUX.2-klein-base-9B_LoRa_by-AI_Characters_STYLE_SmartphoneSnapshotPhotoReality_v13.safetensors",
+    "models/loras/Klein-consistency.safetensors",
+    "models/loras/Klein_9B_bvfinish_v01.safetensors",
+    "models/loras/Klein_ref_transfer_02.safetensors",
+    "models/loras/arch_restore_flux2_klein9b_lora_v3_000002500.safetensors",
+    "models/loras/klein9bDetailSlider.Xrt1.safetensors",
+    "models/loras/klein9bRealismSlider.U3P5.safetensors",
+    "models/loras/klein_archenhanced_refine_v11.safetensors",
+    "models/loras/lenovo_flux_klein9b.safetensors",
+    "models/loras/realistic.safetensors",
+    "models/loras/reccam_Klein_v01.safetensors",
+    "models/loras/sk2real_flux2_klein_9b_v10.safetensors",
+    "models/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+    "models/vae/full_encoder_small_decoder.safetensors"
+  ],
+  "note": "Required only by targets whose stages COPY these files. Model weights are external inputs, excluded from Git. Preserve exact filenames and case."
+}

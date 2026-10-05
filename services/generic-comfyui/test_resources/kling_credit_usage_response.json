@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "prompt_id": "prompt-123",
+  "videos": [
+    {
+      "url": "https://example-bucket.s3.amazonaws.com/output/ComfyUI_00001_.mp4",
+      "filename": "ComfyUI_00001_.mp4",
+      "type": "video"
+    }
+  ],
+  "credit_usage": {
+    "total_estimated_credits": 177.24,
+    "total_estimated_usd": 0.84,
+    "credits_per_usd": 211.0,
+    "source": "estimated",
+    "prompt_id": "prompt-123",
+    "nodes": [
+      {
+        "node_id": "3",
+        "class_type": "KlingVideoNode",
+        "partner_node_name": "Kling",
+        "estimated_credits": 177.24,
+        "estimated_usd": 0.84,
+        "pricing_mode": "estimated_formula",
+        "duration_seconds": 5.0,
+        "resolution": "1080p",
+        "model_name": "kling-v3"
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "image-workflows": {
+    "source_repository": "https://github.com/MomenSirri/worker-comfyui-momen.git",
+    "source_commit": "556e40e4595cd5cde950618d20b36a51d38f9cc8",
+    "imported_working_tree_changes": [
+      "Dockerfile",
+      "README.md",
+      "docker-bake.hcl",
+      "docker-compose.yml"
+    ],
+    "import_policy": "Current source snapshot; no original Git history, weights, credentials, or standalone DFR build.",
+    "included_untracked_source_files": []
+  },
+  "generic-comfyui": {
+    "source_repository": "https://github.com/brick-momen-sirri/worker-comfyui-brick.git",
+    "source_commit": "114da7fa3ceaa7113468ac43ed7f4f53c71674f3",
+    "imported_working_tree_changes": [
+      "Dockerfile",
+      "docker-bake.hcl",
+      "src/patch_comfy_api_download.py"
+    ],
+    "import_policy": "Current source snapshot; no original Git history, weights, credentials, or standalone DFR build.",
+    "included_untracked_source_files": [
+      "src/verify_required_nodes.py",
+      "tests/fixtures/comfyui_download_helpers_v0_38_0.txt",
+      "tests/test_patch_comfy_api_download.py"
+    ]
+  },
+  "ltx25": {
+    "source_repository": "https://github.com/brick-momen-sirri/worker-comfyui-LTX-2.5.git",
+    "source_commit": "1bdcbcf2141521aaf2bc1d93e85256e20bcc587d",
+    "imported_working_tree_changes": [],
+    "import_policy": "Current source snapshot; no original Git history, weights, credentials, or standalone DFR build.",
+    "included_untracked_source_files": []
+  }
+}
