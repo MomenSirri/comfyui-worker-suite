@@ -1,0 +1,87 @@
+# Comfy API worker: the generic worker on CPU PyTorch.
+#
+# Graphs that only call ComfyUI's provider API nodes (image and video models hosted
+# elsewhere) and the core image and video nodes around them never use a GPU. This
+# image therefore has no CUDA libraries, no models and no custom nodes, and starts
+# ComfyUI with --cpu. It runs on a CPU endpoint and on any GPU endpoint, with the
+# same handler and job contract as the generic worker.
+ARG BASE_IMAGE=python:3.12-slim-bookworm
+
+FROM ${BASE_IMAGE} AS final
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_PREFER_BINARY=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_INPUT=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# git fetches ComfyUI, and ComfyUI reads its own revision through it.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# CPU PyTorch in a layer of its own: it is the largest one and changes least often.
+ARG PYTORCH_VERSION=2.10.0
+ARG TORCHVISION_VERSION=0.25.0
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
+      --index-url "${PYTORCH_INDEX_URL}"
+
+# ComfyUI at a release tag, never `latest`: a rebuild must not change the node
+# definitions the graphs were checked against.
+#
+# The sample workflows and the embedded node documentation are left out. They are
+# browser content of about 575 MB that a headless worker never serves, and ComfyUI
+# starts without them. The frontend package stays: ComfyUI exits without it.
+#
+# The last two lines fail the build if a release names those two packages in a
+# way the filter misses, or if a requirement replaced the CPU PyTorch with the
+# CUDA build from PyPI, which would add gigabytes.
+ARG COMFYUI_VERSION=0.39.1
+RUN git clone --depth 1 --branch "v${COMFYUI_VERSION}" https://github.com/Comfy-Org/ComfyUI.git /comfyui \
+    && grep -vE '^(comfyui-workflow-templates|comfyui-embedded-docs)==' /comfyui/requirements.txt > /tmp/comfyui-requirements.txt \
+    && pip install -r /tmp/comfyui-requirements.txt --extra-index-url "${PYTORCH_INDEX_URL}" \
+    && rm /tmp/comfyui-requirements.txt \
+    && ! pip show comfyui-workflow-templates comfyui-embedded-docs >/dev/null 2>&1 \
+    && python -c "import torch, torchvision; assert torch.__version__.endswith('+cpu'), torch.__version__; print('PyTorch', torch.__version__)"
+
+# ComfyUI's API media helper otherwise has no bounded video-download timeout and
+# can wait forever on a response that stops making progress. The patch requires
+# exact upstream anchors, so an incompatible ComfyUI release fails the build here.
+RUN --mount=type=bind,source=src/patch_comfy_api_download.py,target=/tmp/patch_comfy_api_download.py \
+    python /tmp/patch_comfy_api_download.py /comfyui/comfy_api_nodes/util/download_helpers.py
+
+# Python packages the handler needs
+RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
+    pip install -r /tmp/requirements.txt
+
+# Start ComfyUI once on the CPU and fail the build, rather than a paid job, when
+# this release does not register a node type the provider graphs use.
+RUN --mount=type=bind,source=src/verify_required_nodes.py,target=/tmp/verify_required_nodes.py \
+    --mount=type=bind,source=node-lists/comfy-api.txt,target=/tmp/comfy-api-nodes.txt \
+    python /tmp/verify_required_nodes.py --node-list /tmp/comfy-api-nodes.txt \
+    && rm -f /comfyui/user/comfyui*.log
+
+# Support for the network volume
+COPY src/extra_model_paths.yaml /comfyui/
+
+# start.sh calls this helper; without ComfyUI-Manager it only writes a settings file.
+COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
+
+# The worker itself, last, so a handler change rebuilds only this small layer.
+COPY src/start.sh src/network_volume.py handler.py credit_estimator.py test_input.json /
+RUN sed -i 's/\r$//' /start.sh /usr/local/bin/comfy-manager-set-mode \
+    && chmod +x /start.sh /usr/local/bin/comfy-manager-set-mode
+
+# start.sh skips its GPU check and passes --cpu to ComfyUI.
+ENV COMFY_DEVICE=cpu
+
+# At its default level, DEBUG, the RunPod SDK logs the handler's whole output,
+# which holds the presigned result links. An endpoint can still set DEBUG.
+ENV RUNPOD_LOG_LEVEL=INFO
+
+CMD ["/start.sh"]

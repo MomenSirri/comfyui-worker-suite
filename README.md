@@ -4,10 +4,11 @@ Independent ComfyUI workers for image generation, editing, restoration, and vide
 generation/enhancement on RunPod. Choose one target, build one image, and deploy
 that worker independently.
 
-The initial source snapshot contains **23 build configurations**: the existing
-18 image-workflow configurations, one model-free generic ComfyUI worker, and four
-ComfyUI-based LTX variants. Build configurations include runtime foundations,
-hardware variants, and intermediate images; they are not 23 different services.
+The suite contains **24 build configurations**: the existing 18 image-workflow
+configurations, one model-free generic ComfyUI worker and its CPU build for
+provider API graphs, and four ComfyUI-based LTX variants. Build configurations
+include runtime foundations, hardware variants, and intermediate images; they
+are not 24 different services.
 
 ## Repository layout
 
@@ -45,7 +46,7 @@ preserves the original image-workflow Dockerfile; further separation of those
 | Reference generation | `refrence_gen_sdxl_flux2_klein`, `refrence_gen_sdxl_flux2_klein-cuda12-8-1` |
 | SeedVR | `seedvr`, `seedvr-cuda12-8-1`, `seedvr-cuda13-0-2`, `seedvr-runpod-cuda12-8-1` |
 | General enhancement | `enhance`, `enhance-core` |
-| Generic ComfyUI | `generic-comfyui` |
+| Generic ComfyUI | `generic-comfyui`, `comfy-api-cpu` |
 | ComfyUI LTX | `ltx25-int8`, `ltx25-bf16`, `ltx25-cq-v2`, `ltx25-4k` |
 
 The existing spelling `refrence_gen...` is retained for compatibility. All listed

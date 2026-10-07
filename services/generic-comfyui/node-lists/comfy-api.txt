@@ -1,0 +1,35 @@
+# Node types the Comfy API worker must serve: every class_type in the AZ-AI Studio's
+# provider and region graphs. The Dockerfile.cpu build fails when one is missing
+# (src/verify_required_nodes.py --node-list). Update this list together with those graphs.
+
+# Provider API nodes
+ByteDance2FirstLastFrameNode
+ByteDance2ReferenceNodeV2
+ByteDanceSeedreamNodeV3
+Flux3ImageToVideoNode
+GeminiImage2Node
+GeminiNanoBanana2
+KlingFirstLastFrameNode
+KlingImageToVideoWithAudio
+KlingOmniProEditVideoNode
+KlingVideoNode
+MinimaxHailuo03FirstLastFrameNode
+MinimaxHailuo03ReferenceNode
+OpenAIGPTImage1
+OpenAIGPTImageNodeV2
+Veo3FirstLastFrameNode
+Veo3VideoGenerationNode
+
+# Core nodes around them
+BatchImagesNode
+EmptyImage
+GetImageSize
+ImageBlend
+ImageCompositeMasked
+ImageCrop
+ImageScale
+ImageToMask
+LoadImage
+LoadVideo
+SaveImageAdvanced
+SaveVideo
