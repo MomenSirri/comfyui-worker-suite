@@ -1,9 +1,16 @@
 """Runpod entrypoint; retain the customized handler's result-delivery contract."""
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+# The RunPod SDK reads its log level once, while it is imported, and at its
+# default, DEBUG, it logs each job's whole output with the presigned result
+# links. See the same lines in handler.py.
+if not os.environ.get("RUNPOD_LOG_LEVEL"):
+    os.environ["RUNPOD_LOG_LEVEL"] = "INFO"
 
 import runpod
 from handler import handler as comfy_handler
