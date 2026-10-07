@@ -1099,7 +1099,25 @@ def _safe_output_path(output_dir, *parts):
     return candidate
 
 
+def validate_output_storage():
+    """Reject partial S3 configuration before the SDK simulates an upload."""
+    if not os.environ.get("BUCKET_ENDPOINT_URL"):
+        return
+    missing = [
+        name for name in ("BUCKET_ACCESS_KEY_ID", "BUCKET_SECRET_ACCESS_KEY")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        raise ValueError("S3 upload configuration is missing: " + ", ".join(missing))
+    endpoint = urllib.parse.urlparse(os.environ["BUCKET_ENDPOINT_URL"])
+    if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+        raise ValueError("BUCKET_ENDPOINT_URL must be a valid HTTP(S) S3 endpoint")
+    if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+        raise ValueError("BUCKET_ENDPOINT_URL must not contain credentials or query parameters")
+
+
 def _upload_output_bytes(job_id, filename, file_bytes):
+    validate_output_storage()
     file_extension = os.path.splitext(filename)[1] or ".bin"
     temp_file_path = None
     try:
@@ -1108,7 +1126,21 @@ def _upload_output_bytes(job_id, filename, file_bytes):
             temp_file_path = temp_file.name
 
         print(f"worker-comfyui - Uploading {filename} to S3...")
-        s3_url = rp_upload.upload_image(job_id, temp_file_path)
+        if file_extension.lower() in IMAGE_EXTENSIONS:
+            s3_url = rp_upload.upload_image(job_id, temp_file_path)
+        else:
+            # The legacy SDK helper hardcodes image/<extension>. Use its file
+            # uploader for video/audio/text, retaining the same month bucket,
+            # original Runpod job-id prefix and seven-day presigned URL.
+            s3_url = rp_upload.upload_file_to_bucket(
+                file_name=f"{str(uuid.uuid4())[:8]}{file_extension}",
+                file_location=temp_file_path,
+                prefix=str(job_id),
+                extra_args={"ContentType": _guess_mime_type(filename)},
+            )
+        parsed_url = urllib.parse.urlparse(s3_url) if isinstance(s3_url, str) else None
+        if not parsed_url or parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+            raise RuntimeError("S3 upload did not return a usable HTTP(S) result URL")
         # The presigned query string grants read access for a week; log the
         # object location only.
         print(
@@ -1126,18 +1158,22 @@ def _upload_output_bytes(job_id, filename, file_bytes):
 
 
 def _serialize_output_file(job_id, file_info, output_key):
+    if not isinstance(file_info, dict):
+        return None, f"Invalid file descriptor in output key {output_key}"
     filename = file_info.get("filename")
     subfolder = file_info.get("subfolder", "")
-    file_type = file_info.get("type")
+    file_type = file_info.get("type") or "output"
     kind = _media_kind_for_output(output_key, filename)
 
-    if file_type == "temp":
+    # A preview is not a result, and neither is the file a loader node was
+    # given: LoadVideo reports its input clip as an output of type 'input'.
+    if file_type in ("temp", "input"):
         print(
-            f"worker-comfyui - Skipping {kind} {filename} because type is 'temp'"
+            f"worker-comfyui - Skipping {kind} preview {filename} of type '{file_type}'"
         )
         return None, None
 
-    if not filename:
+    if not isinstance(filename, str) or not filename:
         return None, f"Skipping output in key {output_key} due to missing filename: {file_info}"
 
     file_bytes = get_file_data(filename, subfolder, file_type)
@@ -1505,6 +1541,9 @@ def collect_output_media(outputs, job_id):
 
     print(f"worker-comfyui - Processing {len(outputs)} output nodes...")
     for node_id, node_output in outputs.items():
+        if not isinstance(node_output, dict):
+            errors.append(f"Node {node_id} returned invalid output metadata")
+            continue
         handled_keys = []
 
         for output_key in MEDIA_OUTPUT_KEYS:
@@ -1513,6 +1552,15 @@ def collect_output_media(outputs, job_id):
 
             handled_keys.append(output_key)
             output_items = node_output.get(output_key) or []
+            # Core animated image nodes emit `animated: [True]` as a UI hint,
+            # alongside the actual file descriptors under `images`.
+            if output_key == "animated" and (
+                isinstance(output_items, bool)
+                or (isinstance(output_items, (list, tuple)) and all(
+                    isinstance(item, bool) for item in output_items
+                ))
+            ):
+                continue
             if not isinstance(output_items, list):
                 errors.append(
                     f"Node {node_id} output '{output_key}' was not a list: {output_items}"
@@ -1525,6 +1573,15 @@ def collect_output_media(outputs, job_id):
 
             for file_info in output_items:
                 try:
+                    if isinstance(file_info, dict) and file_info.get("filename"):
+                        dedupe_key = _normalize_artifact_key(
+                            file_info.get("type"), file_info.get("subfolder"),
+                            file_info["filename"],
+                        )
+                        if dedupe_key in seen_outputs:
+                            continue
+                    else:
+                        dedupe_key = None
                     result, error = _serialize_output_file(job_id, file_info, output_key)
                     if error:
                         print(f"worker-comfyui - {error}")
@@ -1532,14 +1589,6 @@ def collect_output_media(outputs, job_id):
                         continue
                     if result:
                         kind, output_item = result
-                        dedupe_key = (
-                            kind,
-                            output_item.get("filename"),
-                            output_item.get("type"),
-                            output_item.get("data"),
-                        )
-                        if dedupe_key in seen_outputs:
-                            continue
                         seen_outputs.add(dedupe_key)
                         output_media[kind].append(output_item)
                 except Exception as e:
@@ -1740,6 +1789,11 @@ def handler(job):
 
     job_input = job["input"]
     job_id = job["id"]
+
+    try:
+        validate_output_storage()
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
@@ -2057,7 +2111,9 @@ def handler(job):
             ws.close()
 
     final_result = {}
-    final_result["success"] = True
+    # A caller that finds no file of the kind it expects reads this to tell a
+    # failed job from an answer it does not understand.
+    final_result["success"] = not errors
     final_result["prompt_id"] = prompt_id
 
     for media_key, items in output_media.items():

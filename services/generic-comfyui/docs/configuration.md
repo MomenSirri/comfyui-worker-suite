@@ -29,6 +29,8 @@ At `DEBUG`, which is the SDK's own default, the SDK logs each job's whole output
 
 For the same reason the message of a failed node is logged, and returned in `errors` or `details`, with the query string of every URL in it cut: `https://host/path?[redacted]`. HTTP clients put the request URL into their error text, and a provider's result link is signed. The same cut is applied to the strings in `comfy_credits.details`, which are collected from the whole ComfyUI history. An unsigned URL loses its query string as well.
 
+With `BUCKET_ENDPOINT_URL` set and one of its two keys missing, a job is refused before its workflow runs: the worker could not deliver the result, and the RunPod SDK would return a path on the worker's disk as if it were the link. A video, an audio file or a text file is stored with its own content type; an input a loader node reports back, such as the clip of `LoadVideo`, is not stored or returned. The suite's [job contract](../../../docs/handler-contract.md) describes the whole answer.
+
 ## Debugging Configuration
 
 | Environment Variable           | Description                                                                                                            | Default |
