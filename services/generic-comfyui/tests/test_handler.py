@@ -579,5 +579,99 @@ class TestRunpodWorkerComfy(unittest.TestCase):
         self.assertEqual(usage["nodes"][0]["partner_node_name"], "Kling 3.0 Video")
 
 
+SIGNED_URL = "https://bucket.example.com/prompts/key.mp4?X-Amz-Signature=secret-signature"
+
+
+class TestSignedLinks(unittest.TestCase):
+    """A signed link is a credential: it must reach neither the log nor the job output."""
+
+    def download(self, mock_get, chunks=(b"clip ", b"bytes")):
+        response = mock_get.return_value.__enter__.return_value
+        response.iter_content.return_value = iter(chunks)
+        return response
+
+    @patch("handler.requests.get")
+    def test_url_input_is_streamed(self, mock_get):
+        self.download(mock_get)
+
+        result = handler._decode_data_value(SIGNED_URL, "clip.mp4")
+
+        self.assertEqual(result, b"clip bytes")
+        mock_get.assert_called_once_with(
+            SIGNED_URL, stream=True, timeout=(10, handler.INPUT_DOWNLOAD_TIMEOUT_S)
+        )
+
+    @patch("handler.requests.get")
+    def test_url_input_over_the_size_limit_is_refused(self, mock_get):
+        self.download(mock_get, chunks=(b"12345", b"6789"))
+
+        with patch.object(handler, "INPUT_DOWNLOAD_MAX_BYTES", 8):
+            with self.assertRaises(ValueError) as raised:
+                handler._decode_data_value(SIGNED_URL, "clip.mp4")
+
+        self.assertIn("download limit", str(raised.exception))
+
+    @patch("handler.requests.get")
+    def test_empty_url_input_is_refused(self, mock_get):
+        self.download(mock_get, chunks=())
+
+        with self.assertRaises(ValueError):
+            handler._decode_data_value(SIGNED_URL, "clip.mp4")
+
+    @patch("handler.requests.post")
+    @patch("handler.requests.get")
+    def test_failed_download_does_not_expose_the_signed_link(self, mock_get, mock_post):
+        failure = handler.requests.HTTPError(f"403 Client Error: Forbidden for url: {SIGNED_URL}")
+        failure.response = types.SimpleNamespace(status_code=403)
+        self.download(mock_get).raise_for_status.side_effect = failure
+
+        result = handler.upload_images([{"name": "clip.mp4", "url": SIGNED_URL}])
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("HTTP 403", result["details"][0])
+        self.assertNotIn("secret-signature", str(result))
+        self.assertNotIn("bucket.example.com", str(result))
+        mock_post.assert_not_called()
+
+    @patch("builtins.print")
+    @patch("handler.requests.get")
+    def test_download_timeout_is_reported_without_the_link(self, mock_get, mock_print):
+        mock_get.side_effect = handler.requests.Timeout(f"timed out: {SIGNED_URL}")
+
+        result = handler.upload_images([{"name": "clip.mp4", "url": SIGNED_URL}])
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Timed out downloading", result["details"][0])
+        self.assertNotIn("secret-signature", str(result))
+        self.assertNotIn("secret-signature", str(mock_print.call_args_list))
+
+    @patch("builtins.print")
+    @patch("handler.requests.get")
+    def test_refused_connection_is_reported_without_the_link(self, mock_get, mock_print):
+        # requests puts the path and query of the URL into this message.
+        mock_get.side_effect = handler.requests.ConnectionError(
+            "HTTPSConnectionPool(host='bucket.example.com', port=443): Max retries "
+            "exceeded with url: /prompts/key.mp4?X-Amz-Signature=secret-signature"
+        )
+
+        result = handler.upload_images([{"name": "clip.mp4", "url": SIGNED_URL}])
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("ConnectionError", result["details"][0])
+        for text in (str(result), str(mock_print.call_args_list)):
+            self.assertNotIn("secret-signature", text)
+            self.assertNotIn("bucket.example.com", text)
+
+    @patch("builtins.print")
+    def test_result_upload_logs_the_object_but_not_its_signature(self, mock_print):
+        with patch.object(handler.rp_upload, "upload_image", return_value=SIGNED_URL):
+            url = handler._upload_output_bytes("job-1", "out.mp4", b"video")
+
+        self.assertEqual(url, SIGNED_URL)
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("bucket.example.com/prompts/key.mp4", printed)
+        self.assertNotIn("secret-signature", printed)
+
+
 if __name__ == "__main__":
     unittest.main()
