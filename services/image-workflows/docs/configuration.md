@@ -16,6 +16,16 @@ This document outlines the environment variables available for configuring the `
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `COMFY_LOG_LEVEL`      | Controls ComfyUI's internal logging verbosity. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Use `DEBUG` for troubleshooting, `INFO` for production. | `DEBUG` |
 | `NETWORK_VOLUME_DEBUG` | Enable detailed network volume diagnostics in worker logs. Useful for debugging model path issues. See [Network Volumes & Model Paths](network-volumes.md).      | `false` |
+| `RUNPOD_LOG_LEVEL`     | Verbosity of the RunPod SDK's own log lines: `ERROR`, `WARN`, `INFO`, `DEBUG` or `TRACE`. The handler sets `INFO` when the variable is not set or blank. At `DEBUG`, the SDK's own default, it logs each job's whole output, and with S3 upload configured that output holds the presigned result links. | `INFO`  |
+
+## Job Limits
+
+| Environment Variable           | Description                                                                                                                                                                             | Default            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `INPUT_DOWNLOAD_MAX_BYTES`     | Largest input image fetched from a URL. The image is held in memory before it is handed to ComfyUI.                                                                                     | `52428800` (50 MiB) |
+| `WORKFLOW_EXECUTION_TIMEOUT_S` | Longest a queued workflow may run, in seconds. On expiry the worker interrupts ComfyUI and fails the job. `0` leaves the limit to the endpoint's own execution timeout.                 | `0`                |
+
+With `BUCKET_ENDPOINT_URL` set and one of the two keys missing, a job is refused before its workflow runs: the worker could not deliver the result.
 
 ## Debugging Configuration
 

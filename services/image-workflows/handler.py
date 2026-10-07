@@ -1,10 +1,19 @@
+import os
+
+# At its default level, DEBUG, the RunPod SDK logs the handler's whole output,
+# which holds the presigned result links. The SDK reads the level once, while it
+# is imported, so the default has to be in place before that. An endpoint that
+# sets RUNPOD_LOG_LEVEL keeps its own value. A blank value counts as not set,
+# because the SDK refuses to start on one.
+if not os.environ.get("RUNPOD_LOG_LEVEL"):
+    os.environ["RUNPOD_LOG_LEVEL"] = "INFO"
+
 import runpod
 from runpod.serverless.utils import rp_upload
 import json
 import urllib.request
 import urllib.parse
 import time
-import os
 import requests
 import base64
 from io import BytesIO
@@ -107,6 +116,18 @@ REFRESH_WORKER_ON_FAILURE = (
 FAIL_FAST_ON_EXECUTION_ERROR = (
     os.environ.get("FAIL_FAST_ON_EXECUTION_ERROR", "true").lower() == "true"
 )
+# Largest input image fetched from a URL. It is held in memory before the upload.
+INPUT_DOWNLOAD_MAX_BYTES = int(
+    os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 50 * 1024 * 1024)
+)
+# Longest a queued workflow may run before the worker interrupts it and fails
+# the job. 0, the default, leaves the limit to the endpoint's execution timeout.
+WORKFLOW_EXECUTION_TIMEOUT_S = max(
+    0, int(os.environ.get("WORKFLOW_EXECUTION_TIMEOUT_S", 0))
+)
+# Where a job's image may be: base64 or an HTTP(S) link in 'image' or 'data', or
+# a link in 'url'.
+IMAGE_DATA_KEYS = ("image", "data", "url")
 
 
 def _failure_result(error_message, details=None):
@@ -127,7 +148,7 @@ def _failure_result(error_message, details=None):
     return result
 
 
-def _finalize_job_result(output_messages, errors=None, warnings=None):
+def _finalize_job_result(output_images, errors=None, warnings=None):
     """
     Build the terminal handler response.
 
@@ -135,12 +156,18 @@ def _finalize_job_result(output_messages, errors=None, warnings=None):
     a "successful" response with zero images leaves clients with an ambiguous state,
     so no-image completions are treated as failures with details.
     """
-    output_messages = output_messages or []
+    output_images = output_images or []
     errors = errors or []
     warnings = warnings or []
 
-    if output_messages:
-        return {"status": "success", "message": output_messages}
+    if output_images:
+        return {
+            "images": output_images,
+            # The answer of earlier releases: the same links, or base64 strings,
+            # as a plain list. Kept for callers that still read it.
+            "status": "success",
+            "message": [image["data"] for image in output_images],
+        }
 
     details = [str(item) for item in [*errors, *warnings] if str(item).strip()]
     if not details:
@@ -150,6 +177,62 @@ def _finalize_job_result(output_messages, errors=None, warnings=None):
         "Workflow produced no images.",
         details=details,
     )
+
+
+def _looks_like_url(value):
+    return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
+
+
+# In an absolute URL everything from the "?" on is a query string. Elsewhere, as
+# in the path-only form urllib3 reports, a "?" that leads to "name=" is taken for
+# the start of one. A query string ends at a space or at a character a URL cannot
+# hold unencoded. A single quote is not such a character, so the quote that
+# closes a quoted URL is cut with it. The lengths are bounded so that a long text
+# without spaces cannot make the search slow.
+_ABSOLUTE_URL_QUERY = re.compile(
+    r"""\b((?:https?|wss?)://[^\s"<>?]{1,2048})\?[^\s"<>]*""", re.IGNORECASE
+)
+_NAMED_QUERY = re.compile(r"""\?[^\s"<>=?]{1,256}=[^\s"<>]*""")
+
+
+def _redact_url_queries(text):
+    """
+    Cut the query string out of every URL in a text, keeping the location.
+
+    The query string of a signed link is a credential, and HTTP clients put the
+    request URL into the text of their errors.
+    """
+    text = _ABSOLUTE_URL_QUERY.sub(r"\1?[redacted]", str(text))
+    return _NAMED_QUERY.sub("?[redacted]", text)
+
+
+def _redact_url_queries_in(value):
+    """Apply _redact_url_queries to every string inside a JSON-like value."""
+    if isinstance(value, str):
+        return _redact_url_queries(value)
+    if isinstance(value, list):
+        return [_redact_url_queries_in(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_url_queries_in(item) for key, item in value.items()}
+    return value
+
+
+def validate_output_storage():
+    """Reject partial S3 configuration before the SDK simulates an upload."""
+    if not os.environ.get("BUCKET_ENDPOINT_URL"):
+        return
+    missing = [
+        name for name in ("BUCKET_ACCESS_KEY_ID", "BUCKET_SECRET_ACCESS_KEY")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        raise ValueError("S3 upload configuration is missing: " + ", ".join(missing))
+    endpoint = urllib.parse.urlparse(os.environ["BUCKET_ENDPOINT_URL"])
+    if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+        raise ValueError("BUCKET_ENDPOINT_URL must be a valid HTTP(S) S3 endpoint")
+    if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+        raise ValueError("BUCKET_ENDPOINT_URL must not contain credentials or query parameters")
+
 
 # ---------------------------------------------------------------------------
 # Helper: quick reachability probe of ComfyUI HTTP endpoint (port 8188)
@@ -167,6 +250,51 @@ def _comfy_server_status():
         }
     except Exception as exc:
         return {"reachable": False, "error": str(exc)}
+
+
+class WorkflowExecutionTimeoutError(TimeoutError):
+    """Raised after the worker interrupts a workflow that exceeded its deadline."""
+
+
+def request_comfyui_interrupt(prompt_id):
+    """Best-effort interruption of ComfyUI's currently executing prompt."""
+    print(
+        f"worker-comfyui - Requesting ComfyUI interrupt for timed-out prompt {prompt_id}..."
+    )
+    try:
+        response = requests.post(f"http://{COMFY_HOST}/interrupt", timeout=10)
+        response.raise_for_status()
+        print(
+            f"worker-comfyui - ComfyUI interrupt requested for prompt {prompt_id}."
+        )
+        return None
+    except requests.RequestException as exc:
+        error = f"Failed to interrupt ComfyUI for prompt {prompt_id}: {exc}"
+        print(f"worker-comfyui - {error}")
+        return error
+
+
+def raise_if_workflow_timed_out(
+    prompt_id, wait_started_at, timeout_s=None, now=None
+):
+    """Interrupt and raise when a queued workflow exceeds its execution deadline."""
+    if timeout_s is None:
+        timeout_s = WORKFLOW_EXECUTION_TIMEOUT_S
+    if timeout_s <= 0:
+        return
+
+    current_time = time.monotonic() if now is None else now
+    if current_time - wait_started_at < timeout_s:
+        return
+
+    interrupt_error = request_comfyui_interrupt(prompt_id)
+    message = (
+        f"Workflow execution timed out after {timeout_s:g} seconds for prompt "
+        f"{prompt_id}. ComfyUI interrupt requested."
+    )
+    if interrupt_error:
+        message = f"{message} {interrupt_error}"
+    raise WorkflowExecutionTimeoutError(message)
 
 
 def _attempt_websocket_reconnect(ws_url, max_attempts, delay_s, initial_error):
@@ -870,11 +998,15 @@ def validate_input(job_input):
     images = job_input.get("images")
     if images is not None:
         if not isinstance(images, list) or not all(
-            "name" in image and "image" in image for image in images
+            isinstance(image, dict)
+            and "name" in image
+            and any(key in image for key in IMAGE_DATA_KEYS)
+            for image in images
         ):
             return (
                 None,
-                "'images' must be a list of objects with 'name' and 'image' keys",
+                "'images' must be a list of objects with 'name' and one of "
+                "'image', 'data' or 'url'",
             )
 
     # Optional: API key for Comfy.org API Nodes, passed per-request
@@ -931,12 +1063,48 @@ def check_server(
     return False
 
 
+def _download_image(url, name):
+    """
+    Fetch an input image from an HTTP(S) URL into memory, up to the size limit.
+
+    A signed URL is a credential, and requests puts the URL with its query string
+    into its error messages. Only the failure kind is reported, so the link reaches
+    neither the worker log nor the job output.
+    """
+    try:
+        # Stream downloads to bound memory use, including chunked responses.
+        with requests.get(url, stream=True, timeout=(10, 60)) as downloaded:
+            downloaded.raise_for_status()
+            mime_type = downloaded.headers.get("Content-Type", "image/png").split(";", 1)[0]
+            if not mime_type.startswith("image/") and mime_type != "application/octet-stream":
+                raise ValueError(f"Image URL for {name} did not return an image")
+            buffer = BytesIO()
+            for chunk in downloaded.iter_content(chunk_size=64 * 1024):
+                if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                    limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                    raise ValueError(
+                        f"Image URL for {name} exceeds the {limit_mib} MiB download limit"
+                    )
+                buffer.write(chunk)
+    except requests.Timeout:
+        raise ValueError(f"Timed out downloading the image URL for {name}") from None
+    except requests.RequestException as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        reason = f"HTTP {status}" if status else type(e).__name__
+        raise ValueError(f"Image URL download failed for {name} ({reason})") from None
+
+    if not buffer.tell():
+        raise ValueError(f"Image URL for {name} returned an empty response")
+    return buffer.getvalue(), mime_type
+
+
 def upload_images(images):
     """
     Upload base64 or HTTP(S) images to ComfyUI using /upload/image.
 
     Args:
-        images (list): Dictionaries containing 'name' and 'image' (base64 or URL).
+        images (list): Dictionaries containing 'name' and the image: base64 or a
+            URL in 'image' or 'data', or a URL in 'url'.
 
     Returns:
         dict: A dictionary indicating success or error.
@@ -952,25 +1120,14 @@ def upload_images(images):
     for image in images:
         try:
             name = image["name"]
-            image_data_uri = image["image"]  # Get the full string (might have prefix)
+            # Get the full string (might have prefix)
+            image_data_uri = next(image[key] for key in IMAGE_DATA_KEYS if key in image)
+            if not isinstance(image_data_uri, str):
+                raise ValueError(f"Input image {name} must be a base64 string or URL")
 
             mime_type = "image/png"
-            if image_data_uri.lower().startswith(("http://", "https://")):
-                # Stream downloads to bound memory use, including chunked responses.
-                max_bytes = 50 * 1024 * 1024
-                with requests.get(image_data_uri, stream=True, timeout=(10, 60)) as downloaded:
-                    downloaded.raise_for_status()
-                    mime_type = downloaded.headers.get("Content-Type", "image/png").split(";", 1)[0]
-                    if not mime_type.startswith("image/") and mime_type != "application/octet-stream":
-                        raise ValueError("Image URL did not return an image")
-                    buffer = BytesIO()
-                    for chunk in downloaded.iter_content(chunk_size=64 * 1024):
-                        if buffer.tell() + len(chunk) > max_bytes:
-                            raise ValueError("Image URL exceeds the 50 MiB download limit")
-                        buffer.write(chunk)
-                    blob = buffer.getvalue()
-                    if not blob:
-                        raise ValueError("Image URL returned an empty response")
+            if _looks_like_url(image_data_uri):
+                blob, mime_type = _download_image(image_data_uri, name)
             elif "," in image_data_uri:
                 # Find the comma and take everything after it
                 base64_data = image_data_uri.split(",", 1)[1]
@@ -1007,6 +1164,10 @@ def upload_images(images):
             upload_errors.append(error_msg)
         except requests.RequestException as e:
             error_msg = f"Error uploading {image.get('name', 'unknown')}: {e}"
+            print(f"worker-comfyui - {error_msg}")
+            upload_errors.append(error_msg)
+        except ValueError as e:
+            error_msg = str(e)
             print(f"worker-comfyui - {error_msg}")
             upload_errors.append(error_msg)
         except Exception as e:
@@ -1247,6 +1408,13 @@ def handler(job):
     job_input = job["input"]
     job_id = job["id"]
 
+    # A worker with half its storage settings cannot deliver a result. Say so
+    # before the graph runs; a fresh worker would have the same settings.
+    try:
+        validate_output_storage()
+    except ValueError as exc:
+        return {"error": str(exc)}
+
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
     if error_message:
@@ -1283,7 +1451,7 @@ def handler(job):
     ws = None
     client_id = str(uuid.uuid4())
     prompt_id = None
-    output_messages = []
+    output_images = []
     errors = []
     warnings = []
     progress_state = {
@@ -1357,7 +1525,9 @@ def handler(job):
             force=True,
         )
 
+        workflow_wait_started_at = time.monotonic()
         while True:
+            raise_if_workflow_timed_out(prompt_id, workflow_wait_started_at)
             try:
                 _emit_seedvr_runtime_logs(job, progress_state, runtime_log_state)
                 out = ws.recv()
@@ -1733,10 +1903,14 @@ def handler(job):
                     if data.get("prompt_id") != prompt_id:
                         continue
 
+                    # The message is whatever the failed node raised, and an HTTP
+                    # client error names its request URL. This text is logged,
+                    # sent as a progress update and returned to the caller.
+                    exception_message = _redact_url_queries(data.get("exception_message"))
                     error_details = (
                         f"Node Type: {data.get('node_type')}, "
                         f"Node ID: {data.get('node_id')}, "
-                        f"Message: {data.get('exception_message')}"
+                        f"Message: {exception_message}"
                     )
                     print(f"worker-comfyui - Execution error received: {error_details}")
                     errors.append(f"Workflow execution error: {error_details}")
@@ -1744,12 +1918,12 @@ def handler(job):
                         job,
                         progress_state,
                         "error",
-                        f"node={data.get('node_id')} message={data.get('exception_message')}",
+                        f"node={data.get('node_id')} message={exception_message}",
                         force=True,
                     )
                     _safe_progress_update(
                         job,
-                        f"Execution error at node {data.get('node_id')}: {data.get('exception_message')}",
+                        f"Execution error at node {data.get('node_id')}: {exception_message}",
                         progress_state,
                         force=True,
                     )
@@ -1887,10 +2061,11 @@ def handler(job):
                     subfolder = image_info.get("subfolder", "")
                     img_type = image_info.get("type")
 
-                    # skip temp images
-                    if img_type == "temp":
+                    # A preview is not a result, and neither is the file a
+                    # loader node was given, which it reports with type 'input'.
+                    if img_type in ("temp", "input"):
                         print(
-                            f"worker-comfyui - Skipping image {filename} because type is 'temp'"
+                            f"worker-comfyui - Skipping image {filename} because type is '{img_type}'"
                         )
                         continue
 
@@ -1919,12 +2094,26 @@ def handler(job):
                                 print(f"worker-comfyui - Uploading {filename} to S3...")
                                 s3_url = rp_upload.upload_image(job_id, temp_file_path)
                                 os.remove(temp_file_path)  # Clean up temp file
+                                if not _looks_like_url(s3_url):
+                                    raise RuntimeError(
+                                        "S3 upload did not return a usable HTTP(S) result URL"
+                                    )
+                                # The presigned query string grants read access for a
+                                # week; log the object location only.
                                 print(
-                                    f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
+                                    f"worker-comfyui - Uploaded {filename} to S3: {str(s3_url).split('?', 1)[0]}"
                                 )
-                                output_messages.append(s3_url)
+                                output_images.append(
+                                    {
+                                        "data": s3_url,
+                                        "filename": filename,
+                                        "type": "s3_url",
+                                    }
+                                )
                             except Exception as e:
-                                error_msg = f"Error uploading {filename} to S3: {e}"
+                                error_msg = (
+                                    f"Error uploading {filename} to S3: {_redact_url_queries(e)}"
+                                )
                                 print(f"worker-comfyui - {error_msg}")
                                 errors.append(error_msg)
                                 if "temp_file_path" in locals() and os.path.exists(
@@ -1942,7 +2131,13 @@ def handler(job):
                                 base64_image = base64.b64encode(image_bytes).decode(
                                     "utf-8"
                                 )
-                                output_messages.append(base64_image)
+                                output_images.append(
+                                    {
+                                        "data": base64_image,
+                                        "filename": filename,
+                                        "type": "base64",
+                                    }
+                                )
                                 print(f"worker-comfyui - Encoded {filename} as base64")
                             except Exception as e:
                                 error_msg = f"Error encoding {filename} to base64: {e}"
@@ -1964,6 +2159,10 @@ def handler(job):
                 )
                 warnings.append(warn_msg)
 
+    except WorkflowExecutionTimeoutError as e:
+        print(f"worker-comfyui - {e}")
+        _safe_progress_update(job, f"Job failed: {e}", progress_state, force=True)
+        return _failure_result(str(e))
     except websocket.WebSocketException as e:
         print(f"worker-comfyui - WebSocket Error: {e}")
         print(traceback.format_exc())
@@ -1994,7 +2193,7 @@ def handler(job):
     if warnings:
         print(f"worker-comfyui - Job completed with warnings: {warnings}")
 
-    final_result = _finalize_job_result(output_messages, errors=errors, warnings=warnings)
+    final_result = _finalize_job_result(output_images, errors=errors, warnings=warnings)
     if "error" in final_result:
         print(f"worker-comfyui - Job failed with no output images.")
         _safe_progress_update(
@@ -2007,7 +2206,7 @@ def handler(job):
 
     # Avoid sending progress updates after output is finalized.
     # RunPod may process late progress events out-of-order and keep request state IN_PROGRESS.
-    print(f"worker-comfyui - Job completed. Returning {len(output_messages)} image(s).")
+    print(f"worker-comfyui - Job completed. Returning {len(output_images)} image(s).")
     return final_result
 
 

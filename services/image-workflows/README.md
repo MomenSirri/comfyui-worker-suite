@@ -95,7 +95,7 @@ Each object within the `input.images` array must contain:
 | Field Name | Type   | Required | Description                                                                                                                       |
 | ---------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `name`     | String | Yes      | Filename used to reference the image in the workflow (e.g., via a "Load Image" node). Must be unique within the array.            |
-| `image`    | String | Yes      | HTTP(S) image URL or base64 encoded image. An optional data URI prefix (e.g., `data:image/png;base64,`) is supported. |
+| `image`    | String | Yes      | HTTP(S) image URL or base64 encoded image. An optional data URI prefix (e.g., `data:image/png;base64,`) is supported. `data` is read the same way, and `url` takes a URL; one of the three is required. |
 
 URL input example (reference `reference.png` in your workflow's Load Image node):
 
@@ -103,7 +103,7 @@ URL input example (reference `reference.png` in your workflow's Load Image node)
 {"name": "reference.png", "image": "https://example.com/reference.png"}
 ```
 
-URLs must be accessible from the worker without additional authentication headers. Signed URLs are supported. Downloads follow redirects, use a 10-second connection timeout and 60-second read timeout, and are limited to 50 MiB per image. The response must have an image content type or `application/octet-stream`.
+URLs must be accessible from the worker without additional authentication headers. Signed URLs are supported. Downloads follow redirects, use a 10-second connection timeout and 60-second read timeout, and are limited to 50 MiB per image (`INPUT_DOWNLOAD_MAX_BYTES`). The response must have an image content type or `application/octet-stream`. A failed download reports its kind, never the URL.
 
 > [!NOTE]
 >
@@ -117,6 +117,8 @@ URLs must be accessible from the worker without additional authentication header
 >
 > Versions `< 5.0.0` returned the primary image data (S3 URL or base64 string) directly within an `output.message` field.
 > Starting with `5.0.0`, the output format has changed significantly, see below
+>
+> This handler answers both: `output.images` as below, and beside it `output.status: "success"` with `output.message`, the list of the same links or base64 strings, for callers that still read the earlier form. The suite's [job contract](../../docs/handler-contract.md) describes the answer every ComfyUI handler gives.
 
 ```json
 {
