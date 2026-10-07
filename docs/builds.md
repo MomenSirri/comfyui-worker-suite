@@ -73,13 +73,20 @@ input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
 In both images the handler keeps the RunPod SDK at log level `INFO` unless
 `RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
-### Published: `momensirri/comfy-api-worker:v01`
+### Published: `momensirri/comfy-api-worker:v02`
 
-Pushed on 2026-10-07, digest
-`sha256:fdc6e3f7773e28933d5c9332ef18626de8ccde93a02f182874123ba883bfdfe0`,
-644 MB compressed. Its Python packages, as the build resolved them, are listed in
-`services/generic-comfyui/docs/comfy-api-cpu-v01.pip-freeze.txt`; nothing pins
-them yet, so a later build can resolve newer ones.
+Pushed on 2026-10-07 from `main` at `461b0f9`, digest
+`sha256:3de258192ec2827c20e421e774a61d09493345688d88b98711ffc0b00e066821`,
+644 MB compressed. `v01` stays on Docker Hub for rollback. The root target now
+defaults to the next free tag, `v03`.
+
+Against `v01`, the handler keeps the RunPod SDK at log level `INFO` by itself
+and cuts URL query strings from a failed node's message and from
+`comfy_credits.details`, and the download patch reports a failed download
+without the query string. One package differs, `fastapi` 0.142.3 instead of
+0.142.2: nothing pins the Python packages yet, so each build resolves them
+anew. This build's are listed in
+`services/generic-comfyui/docs/comfy-api-cpu-v02.pip-freeze.txt`.
 
 Checked on a workstation, in the container without a GPU:
 
@@ -93,9 +100,28 @@ Checked on a workstation, in the container without a GPU:
 - With the bucket variables pointing at an S3 stand-in, results are stored as
   `<bucket>/<MM-YY>/<job id>/<id>.<ext>` and returned as `s3_url`; the worker
   log holds no signed query string.
+- The files in the image are the repository's, and its download helper is
+  ComfyUI's released file with the repository's patch applied.
+- The RunPod SDK in the image logs nothing of a job's output, also with
+  `RUNPOD_LOG_LEVEL` removed from the environment, and logs it again when the
+  variable is `DEBUG`.
+- A node whose result download gets a malformed answer fails the job with the
+  query string of the link in neither the answer, the handler's log nor
+  ComfyUI's own log.
+- The service's 61 unit tests pass in the image.
 
 Not checked: a job with a Comfy key, a RunPod endpoint of either kind, storage
 on R2, and how much memory a CPU worker needs.
+
+### Earlier: `momensirri/comfy-api-worker:v01`
+
+Pushed on 2026-10-07, digest
+`sha256:fdc6e3f7773e28933d5c9332ef18626de8ccde93a02f182874123ba883bfdfe0`,
+644 MB compressed, packages in
+`services/generic-comfyui/docs/comfy-api-cpu-v01.pip-freeze.txt`. The first four
+checks above were run on it as well. It keeps the RunPod SDK at `INFO` only
+through the image's own `RUNPOD_LOG_LEVEL`, and a failed download's message can
+hold the query string of the link.
 
 ## LTX workers
 
