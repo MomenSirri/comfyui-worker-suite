@@ -1,10 +1,19 @@
+import os
+
+# At its default level, DEBUG, the RunPod SDK logs the handler's whole output,
+# which holds the presigned result links. The SDK reads the level once, while it
+# is imported, so the default has to be in place before that. An endpoint that
+# sets RUNPOD_LOG_LEVEL keeps its own value. A blank value counts as not set,
+# because the SDK refuses to start on one.
+if not os.environ.get("RUNPOD_LOG_LEVEL"):
+    os.environ["RUNPOD_LOG_LEVEL"] = "INFO"
+
 import runpod
 from runpod.serverless.utils import rp_upload
 import json
 import urllib.request
 import urllib.parse
 import time
-import os
 import requests
 import base64
 import copy
@@ -375,6 +384,40 @@ def _is_comfyui_process_alive():
 
 def _looks_like_url(value):
     return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
+
+
+# In an absolute URL everything from the "?" on is a query string. Elsewhere, as
+# in the path-only form urllib3 reports, a "?" that leads to "name=" is taken for
+# the start of one. A query string ends at a space or at a character a URL cannot
+# hold unencoded. A single quote is not such a character, so the quote that
+# closes a quoted URL is cut with it. The lengths are bounded so that a long text
+# without spaces cannot make the search slow.
+_ABSOLUTE_URL_QUERY = re.compile(
+    r"""\b((?:https?|wss?)://[^\s"<>?]{1,2048})\?[^\s"<>]*""", re.IGNORECASE
+)
+_NAMED_QUERY = re.compile(r"""\?[^\s"<>=?]{1,256}=[^\s"<>]*""")
+
+
+def _redact_url_queries(text):
+    """
+    Cut the query string out of every URL in a text, keeping the location.
+
+    The query string of a signed link is a credential, and HTTP clients put the
+    request URL into the text of their errors.
+    """
+    text = _ABSOLUTE_URL_QUERY.sub(r"\1?[redacted]", str(text))
+    return _NAMED_QUERY.sub("?[redacted]", text)
+
+
+def _redact_url_queries_in(value):
+    """Apply _redact_url_queries to every string inside a JSON-like value."""
+    if isinstance(value, str):
+        return _redact_url_queries(value)
+    if isinstance(value, list):
+        return [_redact_url_queries_in(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_url_queries_in(item) for key, item in value.items()}
+    return value
 
 
 def _download_input(url, filename):
@@ -883,10 +926,13 @@ def _execution_terminal_state(message, prompt_id):
         return {"status": "success", "event": message_type, "data": data}
 
     if message_type == "execution_error":
+        # The message is whatever the failed node raised. For a failed download
+        # that can be an HTTP client error naming a provider's signed result
+        # link, and this text is both logged and returned to the caller.
         details = (
             f"Node Type: {data.get('node_type')}, "
             f"Node ID: {data.get('node_id')}, "
-            f"Message: {data.get('exception_message')}"
+            f"Message: {_redact_url_queries(data.get('exception_message'))}"
         )
         return {
             "status": "error",
@@ -1570,7 +1616,8 @@ def extract_comfy_credit_usage(prompt_history):
     return {
         "available": True,
         "credits_spent": credits_spent,
-        "details": matches,
+        # The history also holds a failed node's message, which can name a URL.
+        "details": _redact_url_queries_in(matches),
     }
 
 

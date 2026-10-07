@@ -56,7 +56,6 @@ endpoint.
 | Credit tracker node, KJNodes | included | not included |
 | Sample workflows, embedded node docs | included | left out (about 575 MB) |
 | Start | GPU pre-flight check | `COMFY_DEVICE=cpu`: no check, `--cpu` |
-| RunPod SDK log level | `DEBUG` unless set | `RUNPOD_LOG_LEVEL=INFO` |
 
 The build fails when a requirement replaces the CPU PyTorch, when the download
 patch no longer fits the ComfyUI release, or when ComfyUI does not register a
@@ -71,6 +70,8 @@ Endpoint variables: `BUCKET_ENDPOINT_URL` (with the bucket as its path),
 `BUCKET_ACCESS_KEY_ID` and `BUCKET_SECRET_ACCESS_KEY` for result links;
 `COMFY_ORG_API_KEY` only when jobs do not carry `comfy_org_api_key`. A URL
 input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
+In both images the handler keeps the RunPod SDK at log level `INFO` unless
+`RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
 ### Published: `momensirri/comfy-api-worker:v01`
 

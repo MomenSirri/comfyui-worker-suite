@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import types
@@ -671,6 +672,148 @@ class TestSignedLinks(unittest.TestCase):
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("bucket.example.com/prompts/key.mp4", printed)
         self.assertNotIn("secret-signature", printed)
+
+    def failed_node(self, exception_message):
+        return {
+            "prompt_id": "prompt-123",
+            "node_id": "8",
+            "node_type": "KlingImage2VideoNode",
+            "exception_message": exception_message,
+        }
+
+    def test_execution_error_names_the_location_but_not_the_signature(self):
+        # aiohttp ends the text of a response error with the request URL.
+        failure = self.failed_node(f"403, message='Forbidden', url='{SIGNED_URL}'\n")
+        history = {
+            "prompt-123": {
+                "status": {"status_str": "error", "messages": [["execution_error", failure]]}
+            }
+        }
+        reported = {
+            "websocket": handler._execution_terminal_state(
+                {"type": "execution_error", "data": failure}, "prompt-123"
+            ),
+            "history": handler._history_terminal_state(history, "prompt-123"),
+        }
+
+        for source, terminal_state in reported.items():
+            with self.subTest(source=source):
+                self.assertIn(
+                    "message='Forbidden', url='https://bucket.example.com/prompts/key.mp4?[redacted]",
+                    terminal_state["error"],
+                )
+                self.assertNotIn("secret-signature", terminal_state["error"])
+
+    @patch("builtins.print")
+    def test_failed_node_reaches_neither_the_log_nor_the_job_output(self, mock_print):
+        failure = self.failed_node(
+            "Media download failed after 3 attempt(s): ClientResponseError: 400, "
+            f"message='Bad status line', url='{SIGNED_URL}'"
+        )
+
+        result, _ = TestRunpodWorkerComfy._run_handler_with_websocket_messages(
+            self, [json.dumps({"type": "execution_error", "data": failure})]
+        )
+
+        self.assertIn("bucket.example.com/prompts/key.mp4", result["errors"][0])
+        for text in (str(result), str(mock_print.call_args_list)):
+            self.assertNotIn("secret-signature", text)
+
+    def test_query_strings_are_cut_in_the_forms_http_clients_report(self):
+        reports = {
+            "aiohttp": "400, message='Bad status line', url='https://cdn.example.com/a.mp4?sig=secret-signature&se=1'",
+            "requests": "403 Client Error: Forbidden for url: https://cdn.example.com/a.mp4?token=secret-signature",
+            "urllib3": "Max retries exceeded with url: /a.mp4?X-Amz-Signature=secret-signature (Caused by Timeout)",
+            "json": '{"url":"https://cdn.example.com/a.mp4?sig=secret-signature","error":"quota exceeded"}',
+            # A URL may hold a single quote, so the cut must not end at one.
+            "quote in the query": "403, message='Forbidden', url=\"https://cdn.example.com/a.mp4?name=it's&sig=secret-signature\"",
+            "no parameter name": "404, message='Not Found', url='https://cdn.example.com/a.mp4?secret-signature'",
+        }
+
+        for client, report in reports.items():
+            with self.subTest(client=client):
+                redacted = handler._redact_url_queries(report)
+
+                self.assertIn("a.mp4?[redacted]", redacted)
+                self.assertNotIn("secret-signature", redacted)
+
+        self.assertIn('"error":"quota exceeded"', handler._redact_url_queries(reports["json"]))
+
+    def test_text_without_a_query_string_is_left_alone(self):
+        messages = (
+            "Value not in list: ckpt_name: 'a.safetensors' not in ['b']. Did you mean b? Set x=1.",
+            "Pattern (?=abc) did not match, see https://docs.example.com/errors#e1203",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertEqual(handler._redact_url_queries(message), message)
+
+    def test_credit_details_do_not_expose_a_signed_link(self):
+        # Credit metadata is searched in the whole history, and the history of a
+        # failed job holds the failed node's message.
+        failure = self.failed_node(
+            f"Insufficient credits: 402, message='Payment Required', url='{SIGNED_URL}'"
+        )
+        history = {"status": {"status_str": "error", "messages": [["execution_error", failure]]}}
+
+        usage = handler.extract_comfy_credit_usage(history)
+
+        self.assertIn("Insufficient credits", str(usage["details"]))
+        self.assertIn("bucket.example.com/prompts/key.mp4?[redacted]", str(usage["details"]))
+        self.assertNotIn("secret-signature", str(usage))
+
+
+# Imports the handler first, as the worker does, then asks the SDK for its level.
+SDK_LOG_LEVEL_PROBE = """
+import importlib.util
+import sys
+
+sys.path[:0] = sys.argv[1:]
+if importlib.util.find_spec("runpod") is None:
+    sys.exit(3)
+
+import handler
+from runpod.serverless.modules.rp_logger import RunPodLogger
+
+print(RunPodLogger.level)
+"""
+
+
+class TestRunpodLogLevel(unittest.TestCase):
+    """At DEBUG the RunPod SDK logs the handler's whole output, signed result links included."""
+
+    def sdk_log_level(self, **variables):
+        service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        environment = {
+            name: value
+            for name, value in os.environ.items()
+            if name not in ("RUNPOD_LOG_LEVEL", "RUNPOD_DEBUG_LEVEL")
+        }
+        probe = subprocess.run(
+            [sys.executable, "-c", SDK_LOG_LEVEL_PROBE, service_dir, os.path.join(service_dir, "src")],
+            env={**environment, **variables},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if probe.returncode == 3:
+            self.skipTest("the RunPod SDK is not installed")
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        return probe.stdout.split()[-1]
+
+    def test_sdk_logs_at_info_when_no_level_is_set(self):
+        self.assertEqual(self.sdk_log_level(), "INFO")
+
+    def test_endpoint_can_still_set_debug(self):
+        self.assertEqual(self.sdk_log_level(RUNPOD_LOG_LEVEL="DEBUG"), "DEBUG")
+
+    def test_older_variable_alone_does_not_lower_the_level(self):
+        self.assertEqual(self.sdk_log_level(RUNPOD_DEBUG_LEVEL="DEBUG"), "INFO")
+
+    def test_blank_level_counts_as_not_set(self):
+        # The SDK raises on a blank level while it is imported.
+        self.assertEqual(self.sdk_log_level(RUNPOD_LOG_LEVEL=""), "INFO")
 
 
 if __name__ == "__main__":
