@@ -47,7 +47,7 @@ def patch_source(source: str) -> str:
     source = _replace_once(
         source,
         "import asyncio\nimport contextlib\nimport uuid\n",
-        "import asyncio\nimport contextlib\nimport os\nimport uuid\n",
+        "import asyncio\nimport contextlib\nimport os\nimport re\nimport uuid\n",
         "import",
     )
     source = _replace_once(
@@ -195,12 +195,21 @@ def patch_source(source: str) -> str:
         ),
         "retryable exception handler",
     )
+    # aiohttp ends the text of a response error with the request URL, and a
+    # provider's result link is signed. ComfyUI logs a failed node's message and
+    # its traceback with every chained error. So the query string is cut from the
+    # message, and the upstream errors that follow chain a stand-in for the
+    # original error instead of the error itself.
     failure_guard = (
+        "            reason = re.sub(\n"
+        "                r\"\\?\\S*\", \"?[redacted]\", f\"{type(e).__name__}: {e}\"\n"
+        "            )\n"
         "            if idle_timeout is not None:\n"
         "                raise ApiServerError(\n"
-        "                    f\"Media download failed after {attempt} attempt(s): \"\n"
-        "                    f\"{type(e).__name__}: {e}\"\n"
-        "                ) from e\n\n"
+        "                    f\"Media download failed after {attempt} attempt(s): {reason}\"\n"
+        "                ) from None\n"
+        "            # The original error names the request URL: chain this instead.\n"
+        "            e = Exception(reason)\n\n"
     )
     source = _replace_variant(
         source,

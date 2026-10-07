@@ -6,7 +6,9 @@ import contextlib
 import os
 from io import BytesIO
 from pathlib import Path
+import re
 import sys
+import traceback
 import types
 import unittest
 from unittest.mock import Mock
@@ -105,6 +107,9 @@ class TestDownloadPatch(unittest.IsolatedAsyncioTestCase):
         async def sleep_with_interrupt(delay, *_args):
             await asyncio.sleep(delay)
 
+        async def diagnose_connectivity():
+            return {"internet_accessible": True}
+
         self.namespace = {
             "__builtins__": __builtins__,
             "asyncio": asyncio,
@@ -112,6 +117,7 @@ class TestDownloadPatch(unittest.IsolatedAsyncioTestCase):
             "BytesIO": BytesIO,
             "Path": Path,
             "os": os,
+            "re": re,
             "uuid": uuid,
             "urljoin": urljoin,
             "urlparse": urlparse,
@@ -122,6 +128,8 @@ class TestDownloadPatch(unittest.IsolatedAsyncioTestCase):
             "ClientError": ClientError,
             "ClientPayloadError": ClientPayloadError,
             "ApiServerError": ApiServerError,
+            "LocalNetworkError": type("LocalNetworkError", (Exception,), {}),
+            "diagnose_connectivity": diagnose_connectivity,
             "ProcessingInterrupted": type("ProcessingInterrupted", (Exception,), {}),
             "is_processing_interrupted": lambda: False,
             "sleep_with_interrupt": sleep_with_interrupt,
@@ -186,6 +194,35 @@ class TestDownloadPatch(unittest.IsolatedAsyncioTestCase):
                 ), timeout=3,
             )
         self.assertTrue(content.cancelled)
+
+    def test_patch_adds_the_imports_its_code_uses(self):
+        # The functions under test are loaded without the helper's own imports,
+        # so nothing else notices an insertion whose module is not imported.
+        for module in ("os", "re"):
+            self.assertIn(f"\nimport {module}\n", self.patched)
+
+    async def test_failed_download_does_not_expose_the_signed_link(self):
+        # aiohttp ends the text of a response error with the request URL, and
+        # ComfyUI logs the traceback of a failed node with every chained error.
+        signed = "https://cdn.example.test/video.mp4?X-Amz-Signature=secret-signature"
+        refused = f"400, message='Bad status line', url='{signed}'"
+        # A video download has an idle limit and its own message. Every other
+        # download ends in the upstream message, with the cause chained.
+        messages = {60: "Media download failed after 1 attempt", None: "appears unreachable"}
+
+        for idle_timeout, message in messages.items():
+            with self.subTest(idle_timeout=idle_timeout):
+                self.responses.append(FakeResponse(FakeContent([ClientError(refused)])))
+
+                with self.assertRaisesRegex(ApiServerError, message) as raised:
+                    await self.download(
+                        signed, BytesIO(), idle_timeout=idle_timeout, max_retries=0
+                    )
+
+                logged = "".join(traceback.format_exception(raised.exception))
+                self.assertIn("ClientError: 400, message='Bad status line'", logged)
+                self.assertIn("cdn.example.test/video.mp4?[redacted]", logged)
+                self.assertNotIn("secret-signature", logged)
 
     async def test_short_response_retries(self):
         self.responses.extend([

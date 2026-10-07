@@ -23,6 +23,11 @@ This document outlines the environment variables available for configuring the `
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `COMFY_LOG_LEVEL`      | Controls ComfyUI's internal logging verbosity. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Use `DEBUG` for troubleshooting, `INFO` for production. | `DEBUG` |
 | `NETWORK_VOLUME_DEBUG` | Enable detailed network volume diagnostics in worker logs. Useful for debugging model path issues. See [Network Volumes & Model Paths](network-volumes.md).      | `false` |
+| `RUNPOD_LOG_LEVEL`     | Verbosity of the RunPod SDK's own log lines: `ERROR`, `WARN`, `INFO`, `DEBUG` or `TRACE`. The handler sets `INFO` when the variable is not set or blank. See the note below before choosing `DEBUG`. | `INFO`  |
+
+At `DEBUG`, which is the SDK's own default, the SDK logs each job's whole output, and with S3 upload configured that output holds the presigned result links. A presigned link is a credential for as long as it is valid (a week), so set `RUNPOD_LOG_LEVEL=DEBUG` on an endpoint only for a short diagnosis and treat that endpoint's logs accordingly. The SDK reads the variable once, at start, so a change needs new workers. Its older name, `RUNPOD_DEBUG_LEVEL`, no longer changes the level on its own.
+
+For the same reason the message of a failed node is logged, and returned in `errors` or `details`, with the query string of every URL in it cut: `https://host/path?[redacted]`. HTTP clients put the request URL into their error text, and a provider's result link is signed. The same cut is applied to the strings in `comfy_credits.details`, which are collected from the whole ComfyUI history. An unsigned URL loses its query string as well.
 
 ## Debugging Configuration
 
