@@ -73,20 +73,31 @@ input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
 In both images the handler keeps the RunPod SDK at log level `INFO` unless
 `RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
-### Published: `momensirri/comfy-api-worker:v02`
+### Published: `momensirri/comfy-api-worker:v03`
 
-Pushed on 2026-10-07 from `main` at `461b0f9`, digest
-`sha256:3de258192ec2827c20e421e774a61d09493345688d88b98711ffc0b00e066821`,
-644 MB compressed. `v01` stays on Docker Hub for rollback. The root target now
-defaults to the next free tag, `v03`.
+Pushed on 2026-10-07 from `main` at `92d1215`, digest
+`sha256:31c1a4f6dc15e9566106e046e84cd157e38178ceecdd29e15dfd3ae566746acc`,
+644 MB compressed. `v02` and `v01` stay on Docker Hub for rollback. The root
+target now defaults to the next free tag, `v04`.
 
-Against `v01`, the handler keeps the RunPod SDK at log level `INFO` by itself
-and cuts URL query strings from a failed node's message and from
-`comfy_credits.details`, and the download patch reports a failed download
-without the query string. One package differs, `fastapi` 0.142.3 instead of
-0.142.2: nothing pins the Python packages yet, so each build resolves them
-anew. This build's are listed in
-`services/generic-comfyui/docs/comfy-api-cpu-v02.pip-freeze.txt`.
+Against `v02`, the handler follows the suite's
+[job contract](handler-contract.md):
+
+- A job whose graph loads a clip and then fails at a later node fails. The clip
+  a loader was given is no longer stored or returned as a result.
+- A video, audio or text result is stored with its own content type, and video
+  jobs no longer list an error about `animated`.
+- `success` is false whenever the job met an error, and a result without bytes
+  is refused.
+- With `BUCKET_ENDPOINT_URL` set and a key missing, a job is refused before its
+  workflow runs.
+- An input link is followed through at most five redirects with their bodies
+  left unread, and a compressed answer is refused.
+
+Its Python packages are those of `v02`, listed in
+`services/generic-comfyui/docs/comfy-api-cpu-v02.pip-freeze.txt`: the layers that
+install them came from the build cache. Nothing pins them yet, so a build
+without that cache resolves them anew.
 
 Checked on a workstation, in the container without a GPU:
 
@@ -94,26 +105,37 @@ Checked on a workstation, in the container without a GPU:
 - The 32 AZ-AI Studio provider and region models, 43 graph variants built by
   AZ-AI's own builders, pass ComfyUI's validation and stop at the provider node
   with `Unauthorized`, because no Comfy key was sent. No provider was called.
-- Through the handler: an image and an MP4 given as `{ name, url }` in
-  `input.images` come back as `output.images` and `output.videos`; a link that
-  answers 404 fails the job without the link in the answer or the log.
+- Seven jobs shaped as the AZ-AI backend sends them went through the image's
+  handler, and each answer was read by the backend's own validator: an image
+  given inline, by link in `url` and by link in `image`; a clip given by link,
+  loaded and saved; a provider graph that loads a clip and fails at the provider
+  node, which is the case `v02` answers as a success; and a link that answers
+  404. The five results are in the bucket once each, the video as `video/mp4`,
+  and the two failing jobs failed.
 - With the bucket variables pointing at an S3 stand-in, results are stored as
   `<bucket>/<MM-YY>/<job id>/<id>.<ext>` and returned as `s3_url`; the worker
   log holds no signed query string.
-- The files in the image are the repository's, and its download helper is
-  ComfyUI's released file with the repository's patch applied.
-- The RunPod SDK in the image logs nothing of a job's output, also with
-  `RUNPOD_LOG_LEVEL` removed from the environment, and logs it again when the
-  variable is `DEBUG`.
-- A node whose result download gets a malformed answer fails the job with the
-  query string of the link in neither the answer, the handler's log nor
-  ComfyUI's own log.
-- The service's 61 unit tests pass in the image.
+- The handler and the other files in the image are the repository's at
+  `92d1215`.
+- The RunPod SDK in the image stays at `INFO` with `RUNPOD_LOG_LEVEL` blank, and
+  goes to `DEBUG` when the variable says so.
+- The service's 86 unit and contract tests pass in the image.
 
-Not checked: a job with a Comfy key, a RunPod endpoint of either kind, storage
-on R2, and how much memory a CPU worker needs.
+Not checked: a job with a Comfy key, this tag on a RunPod endpoint, storage on
+R2 through the SDK's multipart uploader, which non-image results now use, and
+how much memory a CPU worker needs.
 
-Known in `v02` and `v01`, changed in the source after them, so in the next tag:
+### Earlier: `momensirri/comfy-api-worker:v02`
+
+Pushed on 2026-10-07 from `main` at `461b0f9`, digest
+`sha256:3de258192ec2827c20e421e774a61d09493345688d88b98711ffc0b00e066821`,
+644 MB compressed, packages in
+`services/generic-comfyui/docs/comfy-api-cpu-v02.pip-freeze.txt`. Against `v01`
+it keeps the RunPod SDK at `INFO` by itself and cuts URL query strings from a
+failed node's message, from `comfy_credits.details` and from a failed provider
+download.
+
+Known in `v02` and `v01`:
 
 - A job whose graph loads a clip and then fails at a later node, for example at
   a provider node, answers `success: true` with the clip it was given as its
@@ -129,10 +151,9 @@ Known in `v02` and `v01`, changed in the source after them, so in the next tag:
 Pushed on 2026-10-07, digest
 `sha256:fdc6e3f7773e28933d5c9332ef18626de8ccde93a02f182874123ba883bfdfe0`,
 644 MB compressed, packages in
-`services/generic-comfyui/docs/comfy-api-cpu-v01.pip-freeze.txt`. The first four
-checks above were run on it as well. It keeps the RunPod SDK at `INFO` only
-through the image's own `RUNPOD_LOG_LEVEL`, and a failed download's message can
-hold the query string of the link.
+`services/generic-comfyui/docs/comfy-api-cpu-v01.pip-freeze.txt`. It keeps the
+RunPod SDK at `INFO` only through the image's own `RUNPOD_LOG_LEVEL`, and a
+failed download's message can hold the query string of the link.
 
 ## LTX workers
 

@@ -460,7 +460,7 @@ variable "COMFY_API_REGISTRY" {
 }
 
 variable "COMFY_API_VERSION" {
-  default = "v03"
+  default = "v04"
 }
 
 # A release tag, never `latest`: the provider graphs are checked against it.
