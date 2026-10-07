@@ -591,6 +591,8 @@ class TestSignedLinks(unittest.TestCase):
 
     def download(self, mock_get, chunks=(b"clip ", b"bytes")):
         response = mock_get.return_value.__enter__.return_value
+        response.status_code = 200
+        response.headers = {}
         response.iter_content.return_value = iter(chunks)
         return response
 
@@ -602,7 +604,12 @@ class TestSignedLinks(unittest.TestCase):
 
         self.assertEqual(result, b"clip bytes")
         mock_get.assert_called_once_with(
-            SIGNED_URL, stream=True, timeout=(10, handler.INPUT_DOWNLOAD_TIMEOUT_S)
+            SIGNED_URL,
+            stream=True,
+            allow_redirects=False,
+            hooks={"response": handler._hold_redirect},
+            headers={"Accept-Encoding": "identity"},
+            timeout=(10, handler.INPUT_DOWNLOAD_TIMEOUT_S),
         )
 
     @patch("handler.requests.get")

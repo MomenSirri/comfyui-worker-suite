@@ -39,6 +39,7 @@ class ImageInputTests(unittest.TestCase):
 
     def download(self, content_type="image/jpeg", chunks=(b"image bytes",)):
         response = self.get.return_value.__enter__.return_value
+        response.status_code = 200
         response.headers = {"Content-Type": content_type}
         response.iter_content.return_value = iter(chunks)
         return response
@@ -57,7 +58,14 @@ class ImageInputTests(unittest.TestCase):
                 result = handler.upload_images([{"name": "photo.jpg", key: SIGNED_URL}])
 
                 self.assertEqual(result["status"], "success")
-                self.get.assert_called_once_with(SIGNED_URL, stream=True, timeout=(10, 60))
+                self.get.assert_called_once_with(
+                    SIGNED_URL,
+                    stream=True,
+                    allow_redirects=False,
+                    hooks={"response": handler._hold_redirect},
+                    headers={"Accept-Encoding": "identity"},
+                    timeout=(10, 60),
+                )
                 self.assertEqual(self.uploaded(), ("photo.jpg", b"image bytes", "image/jpeg"))
 
     def test_base64_and_data_uri(self):

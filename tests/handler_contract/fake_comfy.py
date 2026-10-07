@@ -57,11 +57,11 @@ def signed(url):
 
 
 class _Response:
-    def __init__(self, url, status=200, body=b"", content_type="application/json"):
+    def __init__(self, url, status=200, body=b"", content_type="application/json", headers=None):
         self.url = url
         self.status_code = status
         self.content = body
-        self.headers = {"Content-Type": content_type}
+        self.headers = {"Content-Type": content_type, **(headers or {})}
 
     @property
     def text(self):
@@ -141,9 +141,12 @@ class FakeComfy:
         self.storage_has_keys = True
         # False runs the worker without a bucket at all: results come back inline.
         self.storage_configured = True
+        # Text of the error the bucket refuses every upload with.
+        self.storage_error = None
 
         # What the job left behind.
         self.input_directory = {}
+        self.link_requests = []
         self.queued = []
         self.bucket = []
         self.progress = []
@@ -152,12 +155,12 @@ class FakeComfy:
 
     # --- Setting up one job ---------------------------------------------------
 
-    def link(self, name, body, status=200, content_type=None):
+    def link(self, name, body, status=200, content_type=None, headers=None):
         """Serve a file at a signed link and return the link."""
         if content_type is None:
             content_type = CONTENT_TYPES.get(os.path.splitext(name)[1], "application/octet-stream")
         url = signed(f"https://{INPUT_HOST}/prompts/{name}")
-        self._links[url] = (status, body, content_type)
+        self._links[url] = (status, body, content_type, headers)
         return url
 
     def saves(self, node_id, filename, body, subfolder="", folder="output", video=False):
@@ -249,13 +252,22 @@ class FakeComfy:
 
     # --- ComfyUI's HTTP API and the input links -------------------------------
 
-    def _get(self, url, **_options):
+    def _get(self, url, **options):
         parts = urllib.parse.urlsplit(url)
         if parts.netloc != COMFY_HOST:
+            self.link_requests.append({"url": url, **options})
             if url not in self._links:
                 raise requests.ConnectionError(f"No route to host for url: {url}")
-            status, body, content_type = self._links[url]
-            return _Response(url, status, body, content_type)
+            status, body, content_type, headers = self._links[url]
+            response = _Response(url, status, body, content_type, headers)
+            hook = (options.get("hooks") or {}).get("response")
+            if hook:
+                response = hook(response) or response
+            if 300 <= status < 400 and "Location" in response.headers:
+                # requests reads the whole body of a redirect answer into memory
+                # before it follows it, and also when told not to follow it.
+                raise AssertionError("requests would read the body of this redirect answer")
+            return response
 
         if parts.path in ("/", "/object_info", "/system_stats"):
             return _json(url, {})
@@ -352,6 +364,8 @@ class FakeComfy:
         return self.storage_configured and self.storage_has_keys
 
     def _store(self, key, body, content_type):
+        if self.storage_error:
+            raise RuntimeError(self.storage_error)
         # The SDK uses the month as the bucket name, under the endpoint's path.
         key = f"{time.strftime('%m-%y')}/{key}"
         self.bucket.append({"key": key, "body": body, "content_type": content_type})

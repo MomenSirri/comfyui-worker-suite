@@ -194,8 +194,11 @@ class ContractCases:
     def test_failed_node_fails_the_job_without_exposing_a_link(self):
         # HTTP clients end their error text with the request URL.
         provider_link = signed("https://cdn.example.com/results/clip.mp4")
+        # A message about credits is also collected into the credit figures.
         self.comfy.fails_at(
-            "8", "ProviderNode", f"403, message='Forbidden', url='{provider_link}'"
+            "8",
+            "ProviderNode",
+            f"Insufficient credits: 402, message='Payment Required', url='{provider_link}'",
         )
         if self.serves_video:
             # A loader has already reported its input when the node after it fails.
@@ -241,10 +244,107 @@ class ContractCases:
         self.assertIn("limit", json.dumps(result, default=str))
         self.assertEqual(self.comfy.queued, [])
 
+    def test_input_link_that_redirects_is_followed_with_the_redirect_left_unread(self):
+        # The stand-in refuses, as an error, a redirect answer that requests
+        # would handle itself: requests reads such an answer whole, whatever its
+        # size, also when told not to follow it.
+        stored = self.comfy.link("stored.png", PNG)
+        moved = self.comfy.link("moved.png", b"x" * 4096, status=302, headers={"Location": stored})
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", moved)], "url"))
+
+        self.assert_stored(backend.settle(result, "image"), RESULT_PNG)
+        self.assertEqual(self.comfy.input_directory["azai_in_1.png"]["body"], PNG)
+        self.assertEqual([request["url"] for request in self.comfy.link_requests], [moved, stored])
+
+    def test_input_link_that_keeps_redirecting_is_refused(self):
+        circle = signed(f"https://{INPUT_HOST}/prompts/circle.png")
+        self.assertEqual(self.comfy.link("circle.png", b"", status=302, headers={"Location": circle}), circle)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", circle)], "url"))
+
+        self.assert_fails_at_once(result)
+        self.assert_keeps_the_link_secret(result)
+        self.assertLess(len(self.comfy.link_requests), 10)
+        self.assertEqual(self.comfy.queued, [])
+
+    def test_answer_that_is_neither_a_file_nor_a_redirect_is_refused(self):
+        # 304 is not an error to requests, and its body is not the file.
+        link = self.comfy.link("azai_in_1.png", b"<html>not modified</html>", status=304)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", link)], "url"))
+
+        self.assert_fails_at_once(result)
+        self.assertEqual(self.comfy.input_directory, {})
+
+    def test_compressed_input_is_refused(self):
+        # A compressed body grows while it is decoded, past a limit that counts
+        # what was decoded.
+        link = self.comfy.link("azai_in_1.png", PNG, headers={"Content-Encoding": "gzip"})
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", link)], "url"))
+
+        self.assert_fails_at_once(result)
+        self.assertEqual(self.comfy.link_requests[0]["headers"], {"Accept-Encoding": "identity"})
+        self.assertEqual(self.comfy.queued, [])
+
+    # --- What counts as a result ----------------------------------------------
+
+    def test_image_a_loader_reports_back_is_not_a_result(self):
+        self.comfy.saves("1", "azai_in_1.png", PNG, folder="input")
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        for kind in self.kinds():
+            with self.subTest(read_as=kind or "original tool"):
+                self.assert_stored(backend.settle(result, kind), RESULT_PNG)
+        self.assertEqual(len(self.comfy.bucket), 1)
+
+    def test_file_that_two_nodes_report_is_one_result(self):
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+        self.comfy.saves("10", "ComfyUI_00001_.png", RESULT_PNG)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        for kind in self.kinds():
+            with self.subTest(read_as=kind or "original tool"):
+                self.assert_stored(backend.settle(result, kind), RESULT_PNG)
+        self.assertEqual(len(self.comfy.bucket), 1)
+
+    def test_result_without_bytes_fails_the_job(self):
+        self.comfy.saves("9", "ComfyUI_00001_.png", b"")
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_fails_at_once(result)
+        self.assertEqual(self.comfy.bucket, [])
+
+    def test_graph_that_left_only_a_preview_fails_the_job(self):
+        self.comfy.saves("7", "ComfyUI_temp_00001_.png", RESULT_PNG, folder="temp")
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_fails_at_once(result)
+        self.assertEqual(self.comfy.bucket, [])
+
     def test_graph_without_a_result_fails_the_job(self):
         result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
 
         self.assert_fails_at_once(result)
+
+    def test_failed_upload_fails_the_job_without_exposing_a_link(self):
+        self.comfy.storage_error = (
+            "Could not connect to the endpoint URL: "
+            + signed(f"{STORAGE_ENDPOINT}/{STORAGE_BUCKET}/10-26/job/a.png")
+        )
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_fails_at_once(result)
+        self.assert_keeps_the_link_secret(result)
 
     def test_storage_without_its_keys_fails_the_job(self):
         # With BUCKET_ENDPOINT_URL set and a key missing, the SDK writes the
@@ -255,6 +355,8 @@ class ContractCases:
         result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
 
         self.assert_fails_at_once(result)
+        # Before the graph runs: a provider node would be paid for nothing.
+        self.assertEqual(self.comfy.queued, [])
 
     def test_graph_that_never_ends_is_stopped_at_the_run_time_limit(self):
         self.comfy.never_finishes = True
@@ -264,6 +366,9 @@ class ContractCases:
 
         self.assert_fails_at_once(result)
         self.assertTrue(self.comfy.interrupted)
+        answer = json.dumps(result, default=str)
+        self.assertIn("timed out", answer)
+        self.assertNotIn("unexpected error", answer)
 
     # --- The worker's own log -------------------------------------------------
 

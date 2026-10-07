@@ -78,6 +78,8 @@ INPUT_DOWNLOAD_TIMEOUT_S = int(os.environ.get("INPUT_DOWNLOAD_TIMEOUT_S", 300))
 INPUT_DOWNLOAD_MAX_BYTES = int(
     os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 256 * 1024 * 1024)
 )
+INPUT_DOWNLOAD_MAX_REDIRECTS = 5
+INPUT_DOWNLOAD_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 WORKFLOW_EXECUTION_TIMEOUT_S = max(
     0, int(os.environ.get("WORKFLOW_EXECUTION_TIMEOUT_S", 1200))
 )
@@ -420,6 +422,18 @@ def _redact_url_queries_in(value):
     return value
 
 
+def _hold_redirect(response, **_kwargs):
+    """
+    Keep requests from handling a redirect answer.
+
+    requests reads the whole body of a redirect answer into memory, whether or
+    not it is told to follow it. Without its Location header the answer is an
+    ordinary one to requests, and its body stays unread.
+    """
+    response.redirect_target = response.headers.pop("Location", None)
+    return response
+
+
 def _download_input(url, filename):
     """
     Fetch an input file from an HTTP(S) URL into memory, up to the size limit.
@@ -428,19 +442,45 @@ def _download_input(url, filename):
     into its error messages. Only the failure kind is reported, so the link reaches
     neither the worker log nor the job output.
     """
+    buffer = BytesIO()
     try:
-        with requests.get(
-            url, stream=True, timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S)
-        ) as response:
-            response.raise_for_status()
-            buffer = BytesIO()
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
-                    limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+        for _hop in range(INPUT_DOWNLOAD_MAX_REDIRECTS + 1):
+            # Redirects are followed here, one at a time, with their bodies left
+            # unread. A compressed body grows while it is decoded, past any limit
+            # counted afterwards, so none is asked for and none is accepted.
+            with requests.get(
+                url,
+                stream=True,
+                allow_redirects=False,
+                hooks={"response": _hold_redirect},
+                headers={"Accept-Encoding": "identity"},
+                timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S),
+            ) as response:
+                status = response.status_code
+                if isinstance(status, int) and 300 <= status < 400:
+                    target = getattr(response, "redirect_target", None)
+                    if not target or status not in INPUT_DOWNLOAD_REDIRECT_STATUSES:
+                        raise ValueError(
+                            f"Input URL download failed for {filename} (HTTP {status})"
+                        )
+                    url = urllib.parse.urljoin(url, target)
+                    continue
+                response.raise_for_status()
+                encoding = str(response.headers.get("Content-Encoding", "")).strip().lower()
+                if encoding not in ("", "identity"):
                     raise ValueError(
-                        f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                        f"Input URL for {filename} returned a compressed response"
                     )
-                buffer.write(chunk)
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                        limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                        raise ValueError(
+                            f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                        )
+                    buffer.write(chunk)
+                break
+        else:
+            raise ValueError(f"Input URL for {filename} redirected too many times")
     except requests.Timeout:
         raise ValueError(f"Timed out downloading the input URL for {filename}") from None
     except requests.RequestException as e:
@@ -1087,8 +1127,8 @@ def _normalize_artifact_key(file_type, subfolder, filename):
 
 
 def _safe_output_path(output_dir, *parts):
-    base_path = os.path.abspath(output_dir)
-    candidate = os.path.abspath(
+    base_path = os.path.realpath(output_dir)
+    candidate = os.path.realpath(
         os.path.join(base_path, *[str(part) for part in parts if part])
     )
     try:
@@ -1177,7 +1217,7 @@ def _serialize_output_file(job_id, file_info, output_key):
         return None, f"Skipping output in key {output_key} due to missing filename: {file_info}"
 
     file_bytes = get_file_data(filename, subfolder, file_type)
-    if file_bytes is None:
+    if not file_bytes:
         return None, f"Failed to fetch output data for {filename} from /view endpoint."
 
     output_item = {
@@ -1393,7 +1433,7 @@ def _read_text_artifact_bytes(artifact, output_dir):
 
     safe_path = _safe_output_path(output_dir, os.path.relpath(file_path, output_dir))
     if not safe_path or os.path.normcase(safe_path) != os.path.normcase(
-        os.path.abspath(file_path)
+        os.path.realpath(file_path)
     ):
         print(
             "worker-comfyui - Refusing to read text artifact outside output dir: "
@@ -1466,7 +1506,7 @@ def _serialize_text_artifact(job_id, artifact, output_dir, existing_file_items=N
             except Exception as upload_err:
                 print(
                     "worker-comfyui - Failed to upload text artifact "
-                    f"{filename}; returning inline text only: {upload_err}"
+                    f"{filename}; returning inline text only: {_redact_url_queries(upload_err)}"
                 )
 
     print(
@@ -1592,9 +1632,10 @@ def collect_output_media(outputs, job_id):
                         seen_outputs.add(dedupe_key)
                         output_media[kind].append(output_item)
                 except Exception as e:
+                    # An upload error can name the request it made.
                     error_msg = (
                         f"Error processing output from node {node_id} "
-                        f"key {output_key}: {e}"
+                        f"key {output_key}: {_redact_url_queries(e)}"
                     )
                     print(f"worker-comfyui - {error_msg}")
                     errors.append(error_msg)

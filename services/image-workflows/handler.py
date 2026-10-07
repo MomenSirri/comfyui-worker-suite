@@ -120,6 +120,8 @@ FAIL_FAST_ON_EXECUTION_ERROR = (
 INPUT_DOWNLOAD_MAX_BYTES = int(
     os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 50 * 1024 * 1024)
 )
+INPUT_DOWNLOAD_MAX_REDIRECTS = 5
+INPUT_DOWNLOAD_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 # Longest a queued workflow may run before the worker interrupts it and fails
 # the job. 0, the default, leaves the limit to the endpoint's execution timeout.
 WORKFLOW_EXECUTION_TIMEOUT_S = max(
@@ -1063,6 +1065,18 @@ def check_server(
     return False
 
 
+def _hold_redirect(response, **_kwargs):
+    """
+    Keep requests from handling a redirect answer.
+
+    requests reads the whole body of a redirect answer into memory, whether or
+    not it is told to follow it. Without its Location header the answer is an
+    ordinary one to requests, and its body stays unread.
+    """
+    response.redirect_target = response.headers.pop("Location", None)
+    return response
+
+
 def _download_image(url, name):
     """
     Fetch an input image from an HTTP(S) URL into memory, up to the size limit.
@@ -1071,21 +1085,46 @@ def _download_image(url, name):
     into its error messages. Only the failure kind is reported, so the link reaches
     neither the worker log nor the job output.
     """
+    buffer = BytesIO()
+    mime_type = "image/png"
     try:
-        # Stream downloads to bound memory use, including chunked responses.
-        with requests.get(url, stream=True, timeout=(10, 60)) as downloaded:
-            downloaded.raise_for_status()
-            mime_type = downloaded.headers.get("Content-Type", "image/png").split(";", 1)[0]
-            if not mime_type.startswith("image/") and mime_type != "application/octet-stream":
-                raise ValueError(f"Image URL for {name} did not return an image")
-            buffer = BytesIO()
-            for chunk in downloaded.iter_content(chunk_size=64 * 1024):
-                if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
-                    limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
-                    raise ValueError(
-                        f"Image URL for {name} exceeds the {limit_mib} MiB download limit"
-                    )
-                buffer.write(chunk)
+        for _hop in range(INPUT_DOWNLOAD_MAX_REDIRECTS + 1):
+            # Redirects are followed here, one at a time, with their bodies left
+            # unread. A compressed body grows while it is decoded, past any limit
+            # counted afterwards, so none is asked for and none is accepted.
+            with requests.get(
+                url,
+                stream=True,
+                allow_redirects=False,
+                hooks={"response": _hold_redirect},
+                headers={"Accept-Encoding": "identity"},
+                timeout=(10, 60),
+            ) as downloaded:
+                status = downloaded.status_code
+                if isinstance(status, int) and 300 <= status < 400:
+                    target = getattr(downloaded, "redirect_target", None)
+                    if not target or status not in INPUT_DOWNLOAD_REDIRECT_STATUSES:
+                        raise ValueError(f"Image URL download failed for {name} (HTTP {status})")
+                    url = urllib.parse.urljoin(url, target)
+                    continue
+                downloaded.raise_for_status()
+                encoding = str(downloaded.headers.get("Content-Encoding", "")).strip().lower()
+                if encoding not in ("", "identity"):
+                    raise ValueError(f"Image URL for {name} returned a compressed response")
+                mime_type = downloaded.headers.get("Content-Type", "image/png").split(";", 1)[0]
+                if not mime_type.startswith("image/") and mime_type != "application/octet-stream":
+                    raise ValueError(f"Image URL for {name} did not return an image")
+                # Stream downloads to bound memory use, including chunked responses.
+                for chunk in downloaded.iter_content(chunk_size=64 * 1024):
+                    if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                        limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                        raise ValueError(
+                            f"Image URL for {name} exceeds the {limit_mib} MiB download limit"
+                        )
+                    buffer.write(chunk)
+                break
+        else:
+            raise ValueError(f"Image URL for {name} redirected too many times")
     except requests.Timeout:
         raise ValueError(f"Timed out downloading the image URL for {name}") from None
     except requests.RequestException as e:
@@ -1452,6 +1491,7 @@ def handler(job):
     client_id = str(uuid.uuid4())
     prompt_id = None
     output_images = []
+    collected_images = set()
     errors = []
     warnings = []
     progress_state = {
@@ -2057,6 +2097,11 @@ def handler(job):
                 )
                 _emit_all_enhance_states(job, progress_state, runtime_log_state, force=True)
                 for image_info in node_output["images"]:
+                    if not isinstance(image_info, dict):
+                        warn_msg = f"Skipping an invalid image entry in node {node_id}"
+                        print(f"worker-comfyui - {warn_msg}")
+                        errors.append(warn_msg)
+                        continue
                     filename = image_info.get("filename")
                     subfolder = image_info.get("subfolder", "")
                     img_type = image_info.get("type")
@@ -2074,6 +2119,12 @@ def handler(job):
                         print(f"worker-comfyui - {warn_msg}")
                         errors.append(warn_msg)
                         continue
+
+                    # A file that two nodes report is stored and returned once.
+                    image_key = (img_type or "output", subfolder or "", filename)
+                    if image_key in collected_images:
+                        continue
+                    collected_images.add(image_key)
 
                     image_bytes = get_image_data(filename, subfolder, img_type)
 

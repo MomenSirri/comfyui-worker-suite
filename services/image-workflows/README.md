@@ -103,7 +103,7 @@ URL input example (reference `reference.png` in your workflow's Load Image node)
 {"name": "reference.png", "image": "https://example.com/reference.png"}
 ```
 
-URLs must be accessible from the worker without additional authentication headers. Signed URLs are supported. Downloads follow redirects, use a 10-second connection timeout and 60-second read timeout, and are limited to 50 MiB per image (`INPUT_DOWNLOAD_MAX_BYTES`). The response must have an image content type or `application/octet-stream`. A failed download reports its kind, never the URL.
+URLs must be accessible from the worker without additional authentication headers. Signed URLs are supported. Downloads follow up to five redirects, use a 10-second connection timeout and 60-second read timeout, and are limited to 50 MiB per image (`INPUT_DOWNLOAD_MAX_BYTES`). The response must have an image content type or `application/octet-stream`, and no `Content-Encoding`. A failed download reports its kind, never the URL.
 
 > [!NOTE]
 >

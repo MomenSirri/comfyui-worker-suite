@@ -31,7 +31,12 @@ megabytes at most.
 nodes and is never logged.
 
 A downloaded input is limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB by default
-in `generic-comfyui` and `ltx25`, 50 MiB in `image-workflows`).
+in `generic-comfyui` and `ltx25`, 50 MiB in `image-workflows`). At most five
+redirects are followed, with their bodies left unread, and a response with a
+`Content-Encoding` is refused: both could otherwise bring more into the worker's
+memory than the limit allows. One read has a timeout. The whole download has
+none of its own; a server that keeps sending a little is ended by the endpoint's
+execution timeout.
 
 ## What a job answers
 
@@ -55,21 +60,31 @@ A job that produced its file answers with it under the key of its kind:
   extension, which is how a reader tells an image from a video.
 - A file a loader node was given is not a result. `LoadVideo` reports its input
   clip as an output of type `input`; no handler stores or returns it.
+- A file that two nodes report is stored and returned once. A file without
+  bytes is not a result.
 - `image-workflows` also answers `status: "success"` and `message`, the list of
   the same links. That was its whole answer in earlier releases, and it is kept
-  for callers that still read it.
+  for callers that still read it. Without a bucket this sends each inline
+  result twice.
 
 A job that failed answers with `error`, a sentence, and may add `details`.
 RunPod reports such a job as `FAILED`. This covers a node that raised, an input
-link that could not be fetched or is too large, a graph that left no file, a
-graph stopped at `WORKFLOW_EXECUTION_TIMEOUT_S`, and a bucket whose variables
-are incomplete. The last one is checked before the graph runs: with
-`BUCKET_ENDPOINT_URL` set and a key missing, the RunPod SDK would write the
-result to the worker's disk and return that path as if it were the link.
+link that could not be fetched or is too large, a result that could not be
+fetched or stored, a graph stopped at `WORKFLOW_EXECUTION_TIMEOUT_S`, and a
+bucket whose variables are incomplete. The last one is checked before the graph
+runs: with `BUCKET_ENDPOINT_URL` set and a key missing, the RunPod SDK would
+write the result to the worker's disk and return that path as if it were the
+link.
 
-`generic-comfyui` keeps one case apart: a job that has files and also met an
-error completes, with the files, the messages under `errors` and
-`success: false`. `ltx25` fails such a job.
+Two cases differ between the handlers:
+
+- A graph that ran to its end and left no file. `image-workflows` fails the
+  job. `generic-comfyui` and `ltx25` complete it with empty lists and
+  `status: "success_no_outputs"`, because a graph may be run for its side
+  effects; a caller that expects a file reads that status as a failure.
+- A job that has files and also met an error. `generic-comfyui` completes it,
+  with the files, the messages under `errors` and `success: false`. `ltx25`
+  fails it.
 
 ## What a worker keeps to itself
 
@@ -96,6 +111,12 @@ counts as failed when the answer has `success: false`, an `error`, or a `status`
 other than `success`, `ok` or `completed`. An answer the backend cannot read is
 worse than a failed job: nothing completes and nothing is refunded until the job
 reaches its age limit.
+
+An endpoint that serves the backend therefore needs all three bucket variables,
+with `BUCKET_ENDPOINT_URL` as the backend's storage endpoint over https and the
+bucket as its path. A worker cannot check this for itself: with another
+address, or with no bucket at all, it answers in good faith with links or inline
+bytes that the backend does not accept.
 
 Which delivery a Studio worker gets is set in the backend's `STUDIO_WORKERS`
 (`"input"`: `base64`, `url` or `image-url`). All three handlers take all three.

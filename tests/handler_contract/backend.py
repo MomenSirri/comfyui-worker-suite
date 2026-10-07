@@ -68,9 +68,12 @@ def _has_control_characters(value):
 
 
 def _safe_filename(value):
+    # The original counts UTF-16 units, so a character outside the basic plane
+    # counts twice.
     return (
         isinstance(value, str)
         and SAFE_FILENAME_PATTERN.fullmatch(value) is not None
+        and len(value.encode("utf-16-le")) // 2 <= 255
         and not _has_control_characters(value)
     )
 
@@ -171,11 +174,17 @@ def parse_completed_media(output, kind):
     return {"data": results[0]["url"], "filename": results[0]["filename"], "type": "s3_url"}
 
 
+def _origin(parts):
+    """Scheme, host and port of a URL, with the scheme's own port left out."""
+    port = None if parts.port == {"https": 443, "http": 80}.get(parts.scheme) else parts.port
+    return parts.scheme, (parts.hostname or "").lower(), port
+
+
 def trusted_object_key(output_url, endpoint, bucket):
     """The object a result link names, when it is in the storage the backend accepts."""
     if not endpoint or not bucket:
         raise Rejected("missing_storage_configuration")
-    if not BUCKET_PATTERN.match(bucket):
+    if not BUCKET_PATTERN.fullmatch(bucket):
         raise Rejected("invalid_storage_bucket")
     if (
         not output_url
@@ -209,14 +218,20 @@ def trusted_object_key(output_url, endpoint, bucket):
         or storage.fragment
     ):
         raise Rejected("invalid_output_url")
-    if storage.netloc.lower() != output.netloc.lower():
+    if _origin(storage) != _origin(output):
         raise Rejected("untrusted_output_origin")
 
     expected_prefix = re.sub(r"/{2,}", "/", f"{storage.path.rstrip('/')}/{bucket}/")
     if not output.path.startswith(expected_prefix):
         raise Rejected("untrusted_output_path")
 
-    key = urllib.parse.unquote(output.path[len(expected_prefix) :])
+    encoded_key = output.path[len(expected_prefix) :]
+    try:
+        if re.search(r"%(?![0-9A-Fa-f]{2})", encoded_key):
+            raise ValueError("malformed escape")
+        key = urllib.parse.unquote(encoded_key, errors="strict")
+    except ValueError:
+        raise Rejected("invalid_output_key") from None
     segments = key.split("/")
     if (
         not key
