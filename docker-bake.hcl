@@ -514,3 +514,29 @@ target "ltx25-4k" {
   args = { BASE_IMAGE = "ltx25-model-base" }
   tags = ["${EXTRA_REGISTRY}/worker-comfyui-ltx25:${EXTRA_LTX_VERSION}-4k"]
 }
+
+# The prompt worker serves a language model with vLLM; it is the one build here
+# without ComfyUI. It is published under its own account and versioned on its own.
+# The default is the next free tag: v01 to v11 are published, and a push to an
+# existing tag replaces it. A build without the files of
+# services/qwen3-vl/compile-cache/ (they are not in version control) makes an
+# image whose workers compile the model at every fresh start.
+variable "QWEN_VL_CONTEXT" {
+  default = "./services/qwen3-vl"
+}
+
+variable "QWEN_VL_REGISTRY" {
+  default = "momensirri"
+}
+
+variable "QWEN_VL_VERSION" {
+  default = "v12"
+}
+
+target "qwen3-vl" {
+  description = "Qwen3-VL-32B prompt worker on RunPod's vLLM worker"
+  context = "${QWEN_VL_CONTEXT}"
+  dockerfile = "Dockerfile"
+  platforms = ["linux/amd64"]
+  tags = ["${QWEN_VL_REGISTRY}/qwen3-vl-32b:${QWEN_VL_VERSION}"]
+}

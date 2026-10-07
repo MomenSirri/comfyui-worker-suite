@@ -32,5 +32,16 @@
     "imported_working_tree_changes": [],
     "import_policy": "Current source snapshot; no original Git history, weights, credentials, or standalone DFR build.",
     "included_untracked_source_files": []
+  },
+  "qwen3-vl": {
+    "source_repository": null,
+    "source_commit": null,
+    "source": "A working folder that was not under version control (worker-qwen3-vl).",
+    "snapshot_utc": "2026-10-07T19:34:06Z",
+    "matches_published_image": "momensirri/qwen3-vl-32b:v11 (created 2026-10-07T19:22:06Z): scripts/start.py, scripts/check-serve-config.py and config/qwen3-vl-32b.yaml are identical to the files in that image.",
+    "import_policy": "Every file of the folder as it was; no weights, credentials, or compile-cache archives (they are made on a GPU for one image and stay out of version control).",
+    "known_gaps": [
+      "README.md describes the tags up to v07 and the 8-bit weights; the Dockerfile builds the 4-bit weights of the later tags."
+    ]
   }
 }

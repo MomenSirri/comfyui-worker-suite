@@ -152,6 +152,16 @@
       ]
     },
     {
+      "name": "qwen3-vl",
+      "service": "qwen3-vl",
+      "purpose": "Qwen3-VL-32B prompt worker on RunPod's vLLM worker",
+      "context": "services/qwen3-vl",
+      "dockerfile": "Dockerfile",
+      "default_tags": [
+        "momensirri/qwen3-vl-32b:v12"
+      ]
+    },
+    {
       "name": "refrence_gen_sdxl_flux2_klein",
       "service": "image-workflows",
       "purpose": "SDXL and FLUX.2 Klein reference-generation bundle",

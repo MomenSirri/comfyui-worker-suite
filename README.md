@@ -4,11 +4,12 @@ Independent ComfyUI workers for image generation, editing, restoration, and vide
 generation/enhancement on RunPod. Choose one target, build one image, and deploy
 that worker independently.
 
-The suite contains **24 build configurations**: the existing 18 image-workflow
+The suite contains **25 build configurations**: the existing 18 image-workflow
 configurations, one model-free generic ComfyUI worker and its CPU build for
-provider API graphs, and four ComfyUI-based LTX variants. Build configurations
+provider API graphs, four ComfyUI-based LTX variants, and one prompt worker that
+serves a language model with vLLM instead of ComfyUI. Build configurations
 include runtime foundations, hardware variants, and intermediate images; they
-are not 24 different services.
+are not 25 different services.
 
 ## Repository layout
 
@@ -22,7 +23,8 @@ comfyui-worker-suite/
 ├── services/
 │   ├── image-workflows/         # Existing 18 Momen configurations
 │   ├── generic-comfyui/         # General model-free ComfyUI worker
-│   └── ltx25/                   # INT8, BF16, CQ V2, and ComfyUI 4K
+│   ├── ltx25/                   # INT8, BF16, CQ V2, and ComfyUI 4K
+│   └── qwen3-vl/                # Prompt worker: Qwen3-VL-32B on vLLM
 ├── docs/
 │   ├── builds.md                # Build and model-input instructions
 │   ├── local-model-inputs.json  # Exact filenames for locally supplied weights
@@ -48,9 +50,11 @@ preserves the original image-workflow Dockerfile; further separation of those
 | General enhancement | `enhance`, `enhance-core` |
 | Generic ComfyUI | `generic-comfyui`, `comfy-api-cpu` |
 | ComfyUI LTX | `ltx25-int8`, `ltx25-bf16`, `ltx25-cq-v2`, `ltx25-4k` |
+| Prompt worker (vLLM) | `qwen3-vl` |
 
-The existing spelling `refrence_gen...` is retained for compatibility. All listed
-builds use ComfyUI. Standalone DFR build recipes are excluded from this suite.
+The existing spelling `refrence_gen...` is retained for compatibility. Every listed
+build uses ComfyUI except `qwen3-vl`. Standalone DFR build recipes are excluded
+from this suite.
 
 ## List and preview
 

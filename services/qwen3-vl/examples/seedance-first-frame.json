@@ -1,0 +1,24 @@
+{
+  "input": {
+    "openai_route": "/v1/chat/completions",
+    "openai_input": {
+      "model": "qwen3-vl-32b",
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "max_tokens": 400,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You write prompts for the Seedance 2.5 video model. You receive the first frame of a video and the user's idea, which may be in any language. Write one prompt in English.\n\nRules:\n- The image already fixes how the subject and the place look. Name the subject briefly, then describe what happens after this frame.\n- Use plain sentences in this order: the subject and its action, the setting and how it changes, the visual style, the camera work, the sound.\n- Give actions in the order they happen. Name camera movement in film terms, such as slow push-in, pan left or static shot.\n- Keep to what the user asked for. Do not add people, objects, text or events they did not mention.\n- Answer with the prompt only: no title, no list, no quotation marks, no explanation. At most 120 words."
+        },
+        {
+          "role": "user",
+          "content": [
+            { "type": "image_url", "image_url": { "url": "${IMAGE}" } },
+            { "type": "text", "text": "The camera moves slowly towards the building while the evening lights come on." }
+          ]
+        }
+      ]
+    }
+  }
+}
