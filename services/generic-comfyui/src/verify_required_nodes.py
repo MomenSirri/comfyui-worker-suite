@@ -80,7 +80,25 @@ def verify_schema(node_id, input_name, response):
     }
 
 
-def verify_nodes(comfy_dir, timeout):
+def read_node_list(path):
+    """Node types from a file with one per line; '#' starts a comment line."""
+    lines = (line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines())
+    names = [line for line in lines if line and not line.startswith("#")]
+    if not names:
+        raise ValueError(f"The node list is empty: {path}")
+    return names
+
+
+def verify_node_list(opener, node_names):
+    """Check that every listed node type is registered, by name only."""
+    registered = set(get_json(opener, "/object_info", timeout=120))
+    missing = sorted(set(node_names) - registered)
+    if missing:
+        raise RuntimeError(f"Required nodes are not registered: {', '.join(missing)}")
+    return sorted(node_names)
+
+
+def verify_nodes(comfy_dir, timeout, node_names=None):
     comfy_dir = Path(comfy_dir).resolve()
     main_path = comfy_dir / "main.py"
     if not main_path.is_file():
@@ -106,10 +124,13 @@ def verify_nodes(comfy_dir, timeout):
         if not version:
             raise RuntimeError("ComfyUI did not report its version.")
         verified = []
-        for node_id, input_name in REQUIRED_NODES.items():
-            check_running(process)
-            response = get_json(opener, f"/object_info/{node_id}")
-            verified.append(verify_schema(node_id, input_name, response))
+        if node_names is not None:
+            verified = verify_node_list(opener, node_names)
+        else:
+            for node_id, input_name in REQUIRED_NODES.items():
+                check_running(process)
+                response = get_json(opener, f"/object_info/{node_id}")
+                verified.append(verify_schema(node_id, input_name, response))
         check_running(process)
         print(json.dumps({
             "comfyui_version": version,
@@ -129,11 +150,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--comfy-dir", default="/comfyui")
     parser.add_argument("--timeout", type=float, default=240)
+    parser.add_argument(
+        "--node-list",
+        help="File with one node type per line. Replaces the built-in schema "
+        "checks with a check that each of these is registered.",
+    )
     args = parser.parse_args()
     if not 0 < args.timeout < float("inf"):
         parser.error("--timeout must be a positive, finite number")
     try:
-        verify_nodes(args.comfy_dir, args.timeout)
+        node_names = read_node_list(args.node_list) if args.node_list else None
+        verify_nodes(args.comfy_dir, args.timeout, node_names)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Required-node verification failed: {error}", file=sys.stderr)
         return 1

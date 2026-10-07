@@ -453,6 +453,31 @@ target "generic-comfyui" {
   tags = ["${EXTRA_REGISTRY}/comfyui-generic:${EXTRA_GENERIC_VERSION}-cu128"]
 }
 
+# The Comfy API worker is published under its own account and versioned on its
+# own. A push to an existing tag replaces it: set the next free tag per release.
+variable "COMFY_API_REGISTRY" {
+  default = "momensirri"
+}
+
+variable "COMFY_API_VERSION" {
+  default = "v01"
+}
+
+# A release tag, never `latest`: the provider graphs are checked against it.
+variable "COMFY_API_COMFYUI_VERSION" {
+  default = "0.39.1"
+}
+
+target "comfy-api-cpu" {
+  description = "Generic worker on CPU PyTorch for graphs that only call provider API nodes"
+  context = "${EXTRA_GENERIC_CONTEXT}"
+  dockerfile = "Dockerfile.cpu"
+  target = "final"
+  platforms = ["linux/amd64"]
+  args = { COMFYUI_VERSION = "${COMFY_API_COMFYUI_VERSION}" }
+  tags = ["${COMFY_API_REGISTRY}/comfy-api-worker:${COMFY_API_VERSION}"]
+}
+
 target "ltx25-int8" {
   description = "Complete LTX 2.5 INT8 generation and enhancement worker"
   context = "${EXTRA_LTX_CONTEXT}"

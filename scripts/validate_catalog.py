@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     catalog = json.loads((ROOT / 'build-catalog.json').read_text(encoding='utf-8'))
     names = [item['name'] for item in catalog['targets']]
-    if len(names) != 23 or len(names) != len(set(names)):
-        raise SystemExit('Expected 23 unique supported build targets')
+    if len(names) != 24 or len(names) != len(set(names)):
+        raise SystemExit('Expected 24 unique supported build targets')
     result = subprocess.run(
         ['docker', 'buildx', 'bake', '-f', 'docker-bake.hcl', *names, '--print'],
         cwd=ROOT, text=True, capture_output=True, check=True,
@@ -19,7 +19,7 @@ def main():
     if set(plan['target']) != set(names):
         raise SystemExit('Catalog and Bake targets differ')
     for name, target in plan['target'].items():
-        if 'dfr' in name.lower() or target['dockerfile'] not in ('Dockerfile', 'Dockerfile.4k'):
+        if 'dfr' in name.lower() or target['dockerfile'] not in ('Dockerfile', 'Dockerfile.4k', 'Dockerfile.cpu'):
             raise SystemExit(f'Unsupported standalone recipe: {name}')
         context = (ROOT / target['context']).resolve()
         if not context.is_relative_to(ROOT) or not (context / target['dockerfile']).is_file():
@@ -37,7 +37,7 @@ def main():
     )
     if set(json.loads(default_result.stdout)['target']) != {'generic-comfyui'}:
         raise SystemExit('Default build must select only the generic worker')
-    print('PASS: 23 ComfyUI build plans, local contexts, profiles, 4K dependency, and generic-only default')
+    print('PASS: 24 ComfyUI build plans, local contexts, profiles, 4K dependency, and generic-only default')
 
 
 if __name__ == '__main__':

@@ -22,6 +22,16 @@
       ]
     },
     {
+      "name": "comfy-api-cpu",
+      "service": "generic-comfyui",
+      "purpose": "Generic worker on CPU PyTorch for graphs that only call provider API nodes",
+      "context": "services/generic-comfyui",
+      "dockerfile": "Dockerfile.cpu",
+      "default_tags": [
+        "momensirri/comfy-api-worker:v01"
+      ]
+    },
+    {
       "name": "enhance",
       "service": "image-workflows",
       "purpose": "General image enhancement full worker",

@@ -40,6 +40,62 @@ verification, and credit tracker integration. Models are supplied via the
 source project's configured volume paths. Its model-free image still runs
 through ComfyUI.
 
+## Comfy API worker (CPU)
+
+`comfy-api-cpu` builds `services/generic-comfyui/Dockerfile.cpu`: the generic
+worker's handler and job contract on CPU PyTorch, for graphs that only call
+ComfyUI's provider API nodes and the core image and video nodes around them.
+No such node uses a GPU, so the image runs on a CPU endpoint and on any GPU
+endpoint.
+
+| | `generic-comfyui` | `comfy-api-cpu` |
+| --- | --- | --- |
+| Base | CUDA 12.8.1 runtime | `python:3.12-slim-bookworm` |
+| PyTorch | cu128 | 2.10.0 CPU |
+| ComfyUI | `latest` unless set | 0.39.1, set by `COMFY_API_COMFYUI_VERSION` |
+| Credit tracker node, KJNodes | included | not included |
+| Sample workflows, embedded node docs | included | left out (about 575 MB) |
+| Start | GPU pre-flight check | `COMFY_DEVICE=cpu`: no check, `--cpu` |
+| RunPod SDK log level | `DEBUG` unless set | `RUNPOD_LOG_LEVEL=INFO` |
+
+The build fails when a requirement replaces the CPU PyTorch, when the download
+patch no longer fits the ComfyUI release, or when ComfyUI does not register a
+node type listed in `services/generic-comfyui/node-lists/comfy-api.txt`. Keep
+that list equal to the node types of the graphs the worker is sent.
+
+Without the credit tracker node, `credit_usage` in a result is the handler's own
+estimate instead of tracked rows, and without KJNodes a graph cannot use
+`SaveStringKJ`.
+
+Endpoint variables: `BUCKET_ENDPOINT_URL` (with the bucket as its path),
+`BUCKET_ACCESS_KEY_ID` and `BUCKET_SECRET_ACCESS_KEY` for result links;
+`COMFY_ORG_API_KEY` only when jobs do not carry `comfy_org_api_key`. A URL
+input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
+
+### Published: `momensirri/comfy-api-worker:v01`
+
+Pushed on 2026-10-07, digest
+`sha256:fdc6e3f7773e28933d5c9332ef18626de8ccde93a02f182874123ba883bfdfe0`,
+644 MB compressed. Its Python packages, as the build resolved them, are listed in
+`services/generic-comfyui/docs/comfy-api-cpu-v01.pip-freeze.txt`; nothing pins
+them yet, so a later build can resolve newer ones.
+
+Checked on a workstation, in the container without a GPU:
+
+- ComfyUI 0.39.1 starts on the CPU and serves the 28 listed node types.
+- The 32 AZ-AI Studio provider and region models, 43 graph variants built by
+  AZ-AI's own builders, pass ComfyUI's validation and stop at the provider node
+  with `Unauthorized`, because no Comfy key was sent. No provider was called.
+- Through the handler: an image and an MP4 given as `{ name, url }` in
+  `input.images` come back as `output.images` and `output.videos`; a link that
+  answers 404 fails the job without the link in the answer or the log.
+- With the bucket variables pointing at an S3 stand-in, results are stored as
+  `<bucket>/<MM-YY>/<job id>/<id>.<ext>` and returned as `s3_url`; the worker
+  log holds no signed query string.
+
+Not checked: a job with a Comfy key, a RunPod endpoint of either kind, storage
+on R2, and how much memory a CPU worker needs.
+
 ## LTX workers
 
 - `ltx25-int8` and `ltx25-bf16` share a workflow catalog; the primary transformer

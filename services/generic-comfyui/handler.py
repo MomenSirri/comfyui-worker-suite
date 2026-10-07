@@ -65,6 +65,10 @@ COMFY_HOST = "127.0.0.1:8188"
 REFRESH_WORKER = os.environ.get("REFRESH_WORKER", "false").lower() == "true"
 
 INPUT_DOWNLOAD_TIMEOUT_S = int(os.environ.get("INPUT_DOWNLOAD_TIMEOUT_S", 300))
+# Largest input file fetched from a URL. It is held in memory before the upload.
+INPUT_DOWNLOAD_MAX_BYTES = int(
+    os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 256 * 1024 * 1024)
+)
 WORKFLOW_EXECUTION_TIMEOUT_S = max(
     0, int(os.environ.get("WORKFLOW_EXECUTION_TIMEOUT_S", 1200))
 )
@@ -373,11 +377,44 @@ def _looks_like_url(value):
     return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
 
 
+def _download_input(url, filename):
+    """
+    Fetch an input file from an HTTP(S) URL into memory, up to the size limit.
+
+    A signed URL is a credential, and requests puts the URL with its query string
+    into its error messages. Only the failure kind is reported, so the link reaches
+    neither the worker log nor the job output.
+    """
+    try:
+        with requests.get(
+            url, stream=True, timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S)
+        ) as response:
+            response.raise_for_status()
+            buffer = BytesIO()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                    limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                    raise ValueError(
+                        f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                    )
+                buffer.write(chunk)
+    except requests.Timeout:
+        raise ValueError(f"Timed out downloading the input URL for {filename}") from None
+    except requests.RequestException as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        reason = f"HTTP {status}" if status else type(e).__name__
+        raise ValueError(
+            f"Input URL download failed for {filename} ({reason})"
+        ) from None
+
+    if not buffer.tell():
+        raise ValueError(f"Input URL for {filename} returned an empty response")
+    return buffer.getvalue()
+
+
 def _decode_data_value(value, filename):
     if _looks_like_url(value):
-        response = requests.get(value, timeout=INPUT_DOWNLOAD_TIMEOUT_S)
-        response.raise_for_status()
-        return response.content
+        return _download_input(value, filename)
 
     if not isinstance(value, str):
         raise ValueError(f"Input media for {filename} must be a base64 string or URL")
@@ -1026,7 +1063,11 @@ def _upload_output_bytes(job_id, filename, file_bytes):
 
         print(f"worker-comfyui - Uploading {filename} to S3...")
         s3_url = rp_upload.upload_image(job_id, temp_file_path)
-        print(f"worker-comfyui - Uploaded {filename} to S3: {s3_url}")
+        # The presigned query string grants read access for a week; log the
+        # object location only.
+        print(
+            f"worker-comfyui - Uploaded {filename} to S3: {str(s3_url).split('?', 1)[0]}"
+        )
         return s3_url
     finally:
         if temp_file_path and os.path.exists(temp_file_path):
