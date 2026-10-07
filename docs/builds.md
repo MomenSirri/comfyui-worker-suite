@@ -109,6 +109,34 @@ LTX full builds require access to their gated model repositories. Supply
 BuildKit secrets. All builds target `linux/amd64`. Consult the LTX source docs
 for driver, VRAM, host RAM, disk, and validation requirements.
 
+## Prompt worker (Qwen3-VL)
+
+`qwen3-vl` builds `services/qwen3-vl`: RunPod's vLLM worker
+(`runpod/worker-v1-vllm`, pinned by tag and digest) with a settings file and a
+small entrypoint. It serves Qwen3-VL-32B-Instruct for writing video prompts and
+is the one build here without ComfyUI. Its own README has the settings, the
+endpoint, the job contract and what was checked.
+
+- The weights are not in the image. A worker downloads the model revision named
+  in the Dockerfile from Hugging Face.
+- `services/qwen3-vl/compile-cache/*.tar.gz` are vLLM's compile caches, one file
+  per GPU generation. They are made on a GPU for one image and are not in version
+  control. The image builds without them, and its workers then compile the model
+  at every fresh start. Put the files that belong to a release into that folder
+  before building it for an endpoint.
+- `momensirri/qwen3-vl-32b` has the tags `v01` to `v11`. The root target defaults
+  to the next free one, `v12`; the service's own `docker-bake.hcl` still names
+  `v11`. Build releases from the suite root.
+- The entrypoint's unit tests need only Python:
+  `python -m unittest discover -s tests` in `services/qwen3-vl`.
+
+The folder was imported on 2026-10-07 from a working folder that was not under
+version control. `scripts/start.py`, `scripts/check-serve-config.py` and
+`config/qwen3-vl-32b.yaml` are byte for byte the files inside the published
+`v11` (compared through the registry). The service README was not yet brought
+up to date for the tags after `v07`: it still names the 8-bit weights as the
+default, while the Dockerfile builds the 4-bit ones.
+
 ## Updating and releasing
 
 1. Change code, workflows, and dependency pins in the appropriate service folder.

@@ -1,0 +1,29 @@
+# `vllm serve` settings for Qwen3-VL-32B-Instruct-FP8 on one 48 GB GPU.
+#
+# Keys are vLLM flags without the leading dashes. An environment variable named after
+# a flag (MAX_MODEL_LEN, LIMIT_MM_PER_PROMPT, ...) overrides the value given here.
+# The model and its revision are set in the Dockerfile (MODEL_NAME, MODEL_REVISION).
+
+# The name callers pass as "model". It stays the same when the weights change.
+served-model-name: qwen3-vl-32b
+
+# Memory on a 48 GB card (about 45 GiB on an L40S):
+#   the weights are 33.1 GiB; the rest of the 0.95 share is for activations and the
+#   KV cache. The KV cache costs 0.25 MiB per token (64 layers, 8 KV heads of 128
+#   values, 16 bit), so the 16,384 tokens of one full context are 4 GiB.
+gpu-memory-utilization: 0.95
+max-model-len: 16384
+max-num-seqs: 8
+
+# Images only, at most four per request, each reduced to at most 1,280 visual tokens
+# (1,310,720 pixels; one token is 32x32 pixels). The model's own limit is 16,384
+# tokens per image, which is this whole context.
+limit-mm-per-prompt:
+  image: 4
+  video: 0
+mm-processor-kwargs:
+  max_pixels: 1310720
+
+# No request generates more than this, whatever max_tokens it asks for.
+override-generation-config:
+  max_new_tokens: 4096

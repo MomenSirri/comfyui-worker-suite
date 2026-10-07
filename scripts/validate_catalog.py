@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     catalog = json.loads((ROOT / 'build-catalog.json').read_text(encoding='utf-8'))
     names = [item['name'] for item in catalog['targets']]
-    if len(names) != 24 or len(names) != len(set(names)):
-        raise SystemExit('Expected 24 unique supported build targets')
+    if len(names) != 25 or len(names) != len(set(names)):
+        raise SystemExit('Expected 25 unique supported build targets')
     result = subprocess.run(
         ['docker', 'buildx', 'bake', '-f', 'docker-bake.hcl', *names, '--print'],
         cwd=ROOT, text=True, capture_output=True, check=True,
@@ -37,7 +37,7 @@ def main():
     )
     if set(json.loads(default_result.stdout)['target']) != {'generic-comfyui'}:
         raise SystemExit('Default build must select only the generic worker')
-    print('PASS: 24 ComfyUI build plans, local contexts, profiles, 4K dependency, and generic-only default')
+    print('PASS: 25 build plans, local contexts, profiles, 4K dependency, and generic-only default')
 
 
 if __name__ == '__main__':

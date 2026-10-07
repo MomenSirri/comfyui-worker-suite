@@ -1,0 +1,11 @@
+.DS_Store
+.env
+__pycache__
+node_modules
+
+# Weights are never part of this repository or its image.
+*.safetensors
+*.gguf
+
+# Made on a GPU for one image: see compile-cache/README.md.
+compile-cache/*.tar.gz

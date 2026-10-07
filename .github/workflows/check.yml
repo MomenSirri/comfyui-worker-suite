@@ -25,3 +25,6 @@ jobs:
       - name: LTX profiles, manifests, and workflow contracts
         working-directory: services/ltx25
         run: python -m unittest tests.test_profiles tests.test_model_bundle tests.test_workflow_contract
+      - name: Prompt worker entrypoint tests
+        working-directory: services/qwen3-vl
+        run: python -m unittest discover -s tests

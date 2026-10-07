@@ -1,0 +1,9 @@
+# The image takes three files and the compile caches. Everything else stays out of the build context.
+*
+!config/
+!config/qwen3-vl-32b.yaml
+!scripts/
+!scripts/check-serve-config.py
+!scripts/start.py
+!compile-cache/
+!compile-cache/*.tar.gz
