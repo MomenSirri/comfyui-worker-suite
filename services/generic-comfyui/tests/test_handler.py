@@ -15,7 +15,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "s
 runpod_module = types.ModuleType("runpod")
 runpod_serverless = types.ModuleType("runpod.serverless")
 runpod_serverless.start = lambda *_args, **_kwargs: None
-runpod_upload = types.SimpleNamespace(upload_image=lambda *_args, **_kwargs: None)
+runpod_upload = types.SimpleNamespace(
+    upload_image=lambda *_args, **_kwargs: None,
+    upload_file_to_bucket=lambda *_args, **_kwargs: None,
+)
 runpod_utils = types.ModuleType("runpod.serverless.utils")
 runpod_utils.rp_upload = runpod_upload
 runpod_module.serverless = runpod_serverless
@@ -588,6 +591,8 @@ class TestSignedLinks(unittest.TestCase):
 
     def download(self, mock_get, chunks=(b"clip ", b"bytes")):
         response = mock_get.return_value.__enter__.return_value
+        response.status_code = 200
+        response.headers = {}
         response.iter_content.return_value = iter(chunks)
         return response
 
@@ -599,7 +604,12 @@ class TestSignedLinks(unittest.TestCase):
 
         self.assertEqual(result, b"clip bytes")
         mock_get.assert_called_once_with(
-            SIGNED_URL, stream=True, timeout=(10, handler.INPUT_DOWNLOAD_TIMEOUT_S)
+            SIGNED_URL,
+            stream=True,
+            allow_redirects=False,
+            hooks={"response": handler._hold_redirect},
+            headers={"Accept-Encoding": "identity"},
+            timeout=(10, handler.INPUT_DOWNLOAD_TIMEOUT_S),
         )
 
     @patch("handler.requests.get")
@@ -665,13 +675,41 @@ class TestSignedLinks(unittest.TestCase):
 
     @patch("builtins.print")
     def test_result_upload_logs_the_object_but_not_its_signature(self, mock_print):
-        with patch.object(handler.rp_upload, "upload_image", return_value=SIGNED_URL):
+        with patch.object(
+            handler.rp_upload, "upload_file_to_bucket", return_value=SIGNED_URL, create=True
+        ):
             url = handler._upload_output_bytes("job-1", "out.mp4", b"video")
 
         self.assertEqual(url, SIGNED_URL)
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("bucket.example.com/prompts/key.mp4", printed)
         self.assertNotIn("secret-signature", printed)
+
+    def test_video_is_stored_as_a_video_under_the_job(self):
+        # The SDK's image helper would store it as image/mp4, which a browser
+        # refuses to play.
+        with (
+            patch.object(handler.rp_upload, "upload_image", create=True) as upload_image,
+            patch.object(
+                handler.rp_upload, "upload_file_to_bucket", return_value=SIGNED_URL, create=True
+            ) as upload_file,
+        ):
+            handler._upload_output_bytes("job-1", "out.mp4", b"video")
+
+        upload_image.assert_not_called()
+        stored = upload_file.call_args.kwargs
+        self.assertEqual(stored["prefix"], "job-1")
+        self.assertEqual(stored["extra_args"], {"ContentType": "video/mp4"})
+        self.assertRegex(stored["file_name"], r"^[0-9a-f-]{8}\.mp4$")
+
+    def test_upload_that_returns_no_link_is_an_error(self):
+        # Without its credentials the SDK writes to the worker's disk and returns
+        # that path as if it were the link.
+        with patch.object(
+            handler.rp_upload, "upload_image", return_value="simulated_uploaded/a.png"
+        ):
+            with self.assertRaises(RuntimeError):
+                handler._upload_output_bytes("job-1", "out.png", b"image")
 
     def failed_node(self, exception_message):
         return {

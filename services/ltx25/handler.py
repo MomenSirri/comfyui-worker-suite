@@ -1,10 +1,19 @@
+import os
+
+# At its default level, DEBUG, the RunPod SDK logs the handler's whole output,
+# which holds the presigned result links. The SDK reads the level once, while it
+# is imported, so the default has to be in place before that. An endpoint that
+# sets RUNPOD_LOG_LEVEL keeps its own value. A blank value counts as not set,
+# because the SDK refuses to start on one.
+if not os.environ.get("RUNPOD_LOG_LEVEL"):
+    os.environ["RUNPOD_LOG_LEVEL"] = "INFO"
+
 import runpod
 from runpod.serverless.utils import rp_upload
 import json
 import urllib.request
 import urllib.parse
 import time
-import os
 import requests
 import base64
 import copy
@@ -65,6 +74,12 @@ COMFY_HOST = "127.0.0.1:8188"
 REFRESH_WORKER = os.environ.get("REFRESH_WORKER", "false").lower() == "true"
 
 INPUT_DOWNLOAD_TIMEOUT_S = int(os.environ.get("INPUT_DOWNLOAD_TIMEOUT_S", 300))
+# Largest input file fetched from a URL. It is held in memory before the upload.
+INPUT_DOWNLOAD_MAX_BYTES = int(
+    os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 256 * 1024 * 1024)
+)
+INPUT_DOWNLOAD_MAX_REDIRECTS = 5
+INPUT_DOWNLOAD_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 WORKFLOW_EXECUTION_TIMEOUT_S = max(
     0, int(os.environ.get("WORKFLOW_EXECUTION_TIMEOUT_S", 1200))
 )
@@ -379,11 +394,116 @@ def _looks_like_url(value):
     return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
 
 
+# In an absolute URL everything from the "?" on is a query string. Elsewhere, as
+# in the path-only form urllib3 reports, a "?" that leads to "name=" is taken for
+# the start of one. A query string ends at a space or at a character a URL cannot
+# hold unencoded. A single quote is not such a character, so the quote that
+# closes a quoted URL is cut with it. The lengths are bounded so that a long text
+# without spaces cannot make the search slow.
+_ABSOLUTE_URL_QUERY = re.compile(
+    r"""\b((?:https?|wss?)://[^\s"<>?]{1,2048})\?[^\s"<>]*""", re.IGNORECASE
+)
+_NAMED_QUERY = re.compile(r"""\?[^\s"<>=?]{1,256}=[^\s"<>]*""")
+
+
+def _redact_url_queries(text):
+    """
+    Cut the query string out of every URL in a text, keeping the location.
+
+    The query string of a signed link is a credential, and HTTP clients put the
+    request URL into the text of their errors.
+    """
+    text = _ABSOLUTE_URL_QUERY.sub(r"\1?[redacted]", str(text))
+    return _NAMED_QUERY.sub("?[redacted]", text)
+
+
+def _redact_url_queries_in(value):
+    """Apply _redact_url_queries to every string inside a JSON-like value."""
+    if isinstance(value, str):
+        return _redact_url_queries(value)
+    if isinstance(value, list):
+        return [_redact_url_queries_in(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_url_queries_in(item) for key, item in value.items()}
+    return value
+
+
+def _hold_redirect(response, **_kwargs):
+    """
+    Keep requests from handling a redirect answer.
+
+    requests reads the whole body of a redirect answer into memory, whether or
+    not it is told to follow it. Without its Location header the answer is an
+    ordinary one to requests, and its body stays unread.
+    """
+    response.redirect_target = response.headers.pop("Location", None)
+    return response
+
+
+def _download_input(url, filename):
+    """
+    Fetch an input file from an HTTP(S) URL into memory, up to the size limit.
+
+    A signed URL is a credential, and requests puts the URL with its query string
+    into its error messages. Only the failure kind is reported, so the link reaches
+    neither the worker log nor the job output.
+    """
+    buffer = BytesIO()
+    try:
+        for _hop in range(INPUT_DOWNLOAD_MAX_REDIRECTS + 1):
+            # Redirects are followed here, one at a time, with their bodies left
+            # unread. A compressed body grows while it is decoded, past any limit
+            # counted afterwards, so none is asked for and none is accepted.
+            with requests.get(
+                url,
+                stream=True,
+                allow_redirects=False,
+                hooks={"response": _hold_redirect},
+                headers={"Accept-Encoding": "identity"},
+                timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S),
+            ) as response:
+                status = response.status_code
+                if isinstance(status, int) and 300 <= status < 400:
+                    target = getattr(response, "redirect_target", None)
+                    if not target or status not in INPUT_DOWNLOAD_REDIRECT_STATUSES:
+                        raise ValueError(
+                            f"Input URL download failed for {filename} (HTTP {status})"
+                        )
+                    url = urllib.parse.urljoin(url, target)
+                    continue
+                response.raise_for_status()
+                encoding = str(response.headers.get("Content-Encoding", "")).strip().lower()
+                if encoding not in ("", "identity"):
+                    raise ValueError(
+                        f"Input URL for {filename} returned a compressed response"
+                    )
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                        limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                        raise ValueError(
+                            f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                        )
+                    buffer.write(chunk)
+                break
+        else:
+            raise ValueError(f"Input URL for {filename} redirected too many times")
+    except requests.Timeout:
+        raise ValueError(f"Timed out downloading the input URL for {filename}") from None
+    except requests.RequestException as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        reason = f"HTTP {status}" if status else type(e).__name__
+        raise ValueError(
+            f"Input URL download failed for {filename} ({reason})"
+        ) from None
+
+    if not buffer.tell():
+        raise ValueError(f"Input URL for {filename} returned an empty response")
+    return buffer.getvalue()
+
+
 def _decode_data_value(value, filename):
     if _looks_like_url(value):
-        response = requests.get(value, timeout=INPUT_DOWNLOAD_TIMEOUT_S)
-        response.raise_for_status()
-        return response.content
+        return _download_input(value, filename)
 
     if not isinstance(value, str):
         raise ValueError(f"Input media for {filename} must be a base64 string or URL")
@@ -852,10 +972,13 @@ def _execution_terminal_state(message, prompt_id):
         return {"status": "success", "event": message_type, "data": data}
 
     if message_type == "execution_error":
+        # The message is whatever the failed node raised. For a failed download
+        # that can be an HTTP client error naming a provider's signed result
+        # link, and this text is both logged and returned to the caller.
         details = (
             f"Node Type: {data.get('node_type')}, "
             f"Node ID: {data.get('node_id')}, "
-            f"Message: {data.get('exception_message')}"
+            f"Message: {_redact_url_queries(data.get('exception_message'))}"
         )
         return {
             "status": "error",
@@ -1401,7 +1524,9 @@ def _serialize_text_artifact(job_id, artifact, output_dir, existing_file_items=N
             except Exception as upload_err:
                 # Inline text remains useful for diagnosis, but a required S3
                 # upload failure must fail the job even when other files exist.
-                return serialized, f"Failed to upload text artifact {filename}: {upload_err}"
+                return serialized, (
+                    f"Failed to upload text artifact {filename}: {_redact_url_queries(upload_err)}"
+                )
 
     print(
         "worker-comfyui - Prepared text artifact: "
@@ -1527,9 +1652,10 @@ def collect_output_media(outputs, job_id):
                         seen_outputs.add(dedupe_key)
                         output_media[kind].append(output_item)
                 except Exception as e:
+                    # An upload error can name the request it made.
                     error_msg = (
                         f"Error processing output from node {node_id} "
-                        f"key {output_key}: {e}"
+                        f"key {output_key}: {_redact_url_queries(e)}"
                     )
                     print(f"worker-comfyui - {error_msg}")
                     errors.append(error_msg)
@@ -1600,7 +1726,8 @@ def extract_comfy_credit_usage(prompt_history):
     return {
         "available": True,
         "credits_spent": credits_spent,
-        "details": matches,
+        # The history also holds a failed node's message, which can name a URL.
+        "details": _redact_url_queries_in(matches),
     }
 
 

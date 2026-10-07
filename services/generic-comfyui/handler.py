@@ -78,6 +78,8 @@ INPUT_DOWNLOAD_TIMEOUT_S = int(os.environ.get("INPUT_DOWNLOAD_TIMEOUT_S", 300))
 INPUT_DOWNLOAD_MAX_BYTES = int(
     os.environ.get("INPUT_DOWNLOAD_MAX_BYTES", 256 * 1024 * 1024)
 )
+INPUT_DOWNLOAD_MAX_REDIRECTS = 5
+INPUT_DOWNLOAD_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 WORKFLOW_EXECUTION_TIMEOUT_S = max(
     0, int(os.environ.get("WORKFLOW_EXECUTION_TIMEOUT_S", 1200))
 )
@@ -420,6 +422,18 @@ def _redact_url_queries_in(value):
     return value
 
 
+def _hold_redirect(response, **_kwargs):
+    """
+    Keep requests from handling a redirect answer.
+
+    requests reads the whole body of a redirect answer into memory, whether or
+    not it is told to follow it. Without its Location header the answer is an
+    ordinary one to requests, and its body stays unread.
+    """
+    response.redirect_target = response.headers.pop("Location", None)
+    return response
+
+
 def _download_input(url, filename):
     """
     Fetch an input file from an HTTP(S) URL into memory, up to the size limit.
@@ -428,19 +442,45 @@ def _download_input(url, filename):
     into its error messages. Only the failure kind is reported, so the link reaches
     neither the worker log nor the job output.
     """
+    buffer = BytesIO()
     try:
-        with requests.get(
-            url, stream=True, timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S)
-        ) as response:
-            response.raise_for_status()
-            buffer = BytesIO()
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
-                    limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+        for _hop in range(INPUT_DOWNLOAD_MAX_REDIRECTS + 1):
+            # Redirects are followed here, one at a time, with their bodies left
+            # unread. A compressed body grows while it is decoded, past any limit
+            # counted afterwards, so none is asked for and none is accepted.
+            with requests.get(
+                url,
+                stream=True,
+                allow_redirects=False,
+                hooks={"response": _hold_redirect},
+                headers={"Accept-Encoding": "identity"},
+                timeout=(10, INPUT_DOWNLOAD_TIMEOUT_S),
+            ) as response:
+                status = response.status_code
+                if isinstance(status, int) and 300 <= status < 400:
+                    target = getattr(response, "redirect_target", None)
+                    if not target or status not in INPUT_DOWNLOAD_REDIRECT_STATUSES:
+                        raise ValueError(
+                            f"Input URL download failed for {filename} (HTTP {status})"
+                        )
+                    url = urllib.parse.urljoin(url, target)
+                    continue
+                response.raise_for_status()
+                encoding = str(response.headers.get("Content-Encoding", "")).strip().lower()
+                if encoding not in ("", "identity"):
                     raise ValueError(
-                        f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                        f"Input URL for {filename} returned a compressed response"
                     )
-                buffer.write(chunk)
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if buffer.tell() + len(chunk) > INPUT_DOWNLOAD_MAX_BYTES:
+                        limit_mib = INPUT_DOWNLOAD_MAX_BYTES // (1024 * 1024)
+                        raise ValueError(
+                            f"Input URL for {filename} exceeds the {limit_mib} MiB download limit"
+                        )
+                    buffer.write(chunk)
+                break
+        else:
+            raise ValueError(f"Input URL for {filename} redirected too many times")
     except requests.Timeout:
         raise ValueError(f"Timed out downloading the input URL for {filename}") from None
     except requests.RequestException as e:
@@ -1087,8 +1127,8 @@ def _normalize_artifact_key(file_type, subfolder, filename):
 
 
 def _safe_output_path(output_dir, *parts):
-    base_path = os.path.abspath(output_dir)
-    candidate = os.path.abspath(
+    base_path = os.path.realpath(output_dir)
+    candidate = os.path.realpath(
         os.path.join(base_path, *[str(part) for part in parts if part])
     )
     try:
@@ -1099,7 +1139,25 @@ def _safe_output_path(output_dir, *parts):
     return candidate
 
 
+def validate_output_storage():
+    """Reject partial S3 configuration before the SDK simulates an upload."""
+    if not os.environ.get("BUCKET_ENDPOINT_URL"):
+        return
+    missing = [
+        name for name in ("BUCKET_ACCESS_KEY_ID", "BUCKET_SECRET_ACCESS_KEY")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        raise ValueError("S3 upload configuration is missing: " + ", ".join(missing))
+    endpoint = urllib.parse.urlparse(os.environ["BUCKET_ENDPOINT_URL"])
+    if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+        raise ValueError("BUCKET_ENDPOINT_URL must be a valid HTTP(S) S3 endpoint")
+    if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+        raise ValueError("BUCKET_ENDPOINT_URL must not contain credentials or query parameters")
+
+
 def _upload_output_bytes(job_id, filename, file_bytes):
+    validate_output_storage()
     file_extension = os.path.splitext(filename)[1] or ".bin"
     temp_file_path = None
     try:
@@ -1108,7 +1166,21 @@ def _upload_output_bytes(job_id, filename, file_bytes):
             temp_file_path = temp_file.name
 
         print(f"worker-comfyui - Uploading {filename} to S3...")
-        s3_url = rp_upload.upload_image(job_id, temp_file_path)
+        if file_extension.lower() in IMAGE_EXTENSIONS:
+            s3_url = rp_upload.upload_image(job_id, temp_file_path)
+        else:
+            # The legacy SDK helper hardcodes image/<extension>. Use its file
+            # uploader for video/audio/text, retaining the same month bucket,
+            # original Runpod job-id prefix and seven-day presigned URL.
+            s3_url = rp_upload.upload_file_to_bucket(
+                file_name=f"{str(uuid.uuid4())[:8]}{file_extension}",
+                file_location=temp_file_path,
+                prefix=str(job_id),
+                extra_args={"ContentType": _guess_mime_type(filename)},
+            )
+        parsed_url = urllib.parse.urlparse(s3_url) if isinstance(s3_url, str) else None
+        if not parsed_url or parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+            raise RuntimeError("S3 upload did not return a usable HTTP(S) result URL")
         # The presigned query string grants read access for a week; log the
         # object location only.
         print(
@@ -1126,22 +1198,26 @@ def _upload_output_bytes(job_id, filename, file_bytes):
 
 
 def _serialize_output_file(job_id, file_info, output_key):
+    if not isinstance(file_info, dict):
+        return None, f"Invalid file descriptor in output key {output_key}"
     filename = file_info.get("filename")
     subfolder = file_info.get("subfolder", "")
-    file_type = file_info.get("type")
+    file_type = file_info.get("type") or "output"
     kind = _media_kind_for_output(output_key, filename)
 
-    if file_type == "temp":
+    # A preview is not a result, and neither is the file a loader node was
+    # given: LoadVideo reports its input clip as an output of type 'input'.
+    if file_type in ("temp", "input"):
         print(
-            f"worker-comfyui - Skipping {kind} {filename} because type is 'temp'"
+            f"worker-comfyui - Skipping {kind} preview {filename} of type '{file_type}'"
         )
         return None, None
 
-    if not filename:
+    if not isinstance(filename, str) or not filename:
         return None, f"Skipping output in key {output_key} due to missing filename: {file_info}"
 
     file_bytes = get_file_data(filename, subfolder, file_type)
-    if file_bytes is None:
+    if not file_bytes:
         return None, f"Failed to fetch output data for {filename} from /view endpoint."
 
     output_item = {
@@ -1357,7 +1433,7 @@ def _read_text_artifact_bytes(artifact, output_dir):
 
     safe_path = _safe_output_path(output_dir, os.path.relpath(file_path, output_dir))
     if not safe_path or os.path.normcase(safe_path) != os.path.normcase(
-        os.path.abspath(file_path)
+        os.path.realpath(file_path)
     ):
         print(
             "worker-comfyui - Refusing to read text artifact outside output dir: "
@@ -1430,7 +1506,7 @@ def _serialize_text_artifact(job_id, artifact, output_dir, existing_file_items=N
             except Exception as upload_err:
                 print(
                     "worker-comfyui - Failed to upload text artifact "
-                    f"{filename}; returning inline text only: {upload_err}"
+                    f"{filename}; returning inline text only: {_redact_url_queries(upload_err)}"
                 )
 
     print(
@@ -1505,6 +1581,9 @@ def collect_output_media(outputs, job_id):
 
     print(f"worker-comfyui - Processing {len(outputs)} output nodes...")
     for node_id, node_output in outputs.items():
+        if not isinstance(node_output, dict):
+            errors.append(f"Node {node_id} returned invalid output metadata")
+            continue
         handled_keys = []
 
         for output_key in MEDIA_OUTPUT_KEYS:
@@ -1513,6 +1592,15 @@ def collect_output_media(outputs, job_id):
 
             handled_keys.append(output_key)
             output_items = node_output.get(output_key) or []
+            # Core animated image nodes emit `animated: [True]` as a UI hint,
+            # alongside the actual file descriptors under `images`.
+            if output_key == "animated" and (
+                isinstance(output_items, bool)
+                or (isinstance(output_items, (list, tuple)) and all(
+                    isinstance(item, bool) for item in output_items
+                ))
+            ):
+                continue
             if not isinstance(output_items, list):
                 errors.append(
                     f"Node {node_id} output '{output_key}' was not a list: {output_items}"
@@ -1525,6 +1613,15 @@ def collect_output_media(outputs, job_id):
 
             for file_info in output_items:
                 try:
+                    if isinstance(file_info, dict) and file_info.get("filename"):
+                        dedupe_key = _normalize_artifact_key(
+                            file_info.get("type"), file_info.get("subfolder"),
+                            file_info["filename"],
+                        )
+                        if dedupe_key in seen_outputs:
+                            continue
+                    else:
+                        dedupe_key = None
                     result, error = _serialize_output_file(job_id, file_info, output_key)
                     if error:
                         print(f"worker-comfyui - {error}")
@@ -1532,20 +1629,13 @@ def collect_output_media(outputs, job_id):
                         continue
                     if result:
                         kind, output_item = result
-                        dedupe_key = (
-                            kind,
-                            output_item.get("filename"),
-                            output_item.get("type"),
-                            output_item.get("data"),
-                        )
-                        if dedupe_key in seen_outputs:
-                            continue
                         seen_outputs.add(dedupe_key)
                         output_media[kind].append(output_item)
                 except Exception as e:
+                    # An upload error can name the request it made.
                     error_msg = (
                         f"Error processing output from node {node_id} "
-                        f"key {output_key}: {e}"
+                        f"key {output_key}: {_redact_url_queries(e)}"
                     )
                     print(f"worker-comfyui - {error_msg}")
                     errors.append(error_msg)
@@ -1740,6 +1830,11 @@ def handler(job):
 
     job_input = job["input"]
     job_id = job["id"]
+
+    try:
+        validate_output_storage()
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
@@ -2057,7 +2152,9 @@ def handler(job):
             ws.close()
 
     final_result = {}
-    final_result["success"] = True
+    # A caller that finds no file of the kind it expects reads this to tell a
+    # failed job from an answer it does not understand.
+    final_result["success"] = not errors
     final_result["prompt_id"] = prompt_id
 
     for media_key, items in output_media.items():

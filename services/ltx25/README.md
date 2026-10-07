@@ -117,6 +117,8 @@ Copy [.env.example](.env.example) to a private environment file or configure Run
 | `BUCKET_SECRET_ACCESS_KEY` | S3 secret, supplied at runtime |
 | `ALLOW_CUSTOM_WORKFLOWS` | `false` enforces named modes; default `true` preserves trusted legacy callers |
 | `WORKFLOW_EXECUTION_TIMEOUT_S` | Generation deadline; default 1200, deployment template 3600 |
+| `INPUT_DOWNLOAD_MAX_BYTES` | Largest input file a custom-workflow job may give by link; default 256 MiB. Named modes keep `MAX_IMAGE_BYTES` and `MAX_MEDIA_BYTES` |
+| `RUNPOD_LOG_LEVEL` | The RunPod SDK's log level; the worker sets `INFO` unless it has a value. At `DEBUG` the SDK logs each job's output with its presigned result links |
 | `LTX_MIN_VRAM_GB` | Optional startup VRAM gate in GiB; blank selects 23 for INT8 or 47 for BF16. Admission only, not a memory-fit guarantee |
 | `MAX_OUTPUT_PIXELS` | Final resolution cap after upscaling/padding; default 1920×1088 pixels |
 | `MAX_INLINE_OUTPUT_BYTES` / `MAX_RESULT_BYTES` | 5 MiB per binary artifact / 8 MiB named-mode JSON result; use S3 for videos |

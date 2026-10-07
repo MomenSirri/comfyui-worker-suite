@@ -25,8 +25,11 @@ comfyui-worker-suite/
 │   ├── generic-comfyui/         # General model-free ComfyUI worker
 │   ├── ltx25/                   # INT8, BF16, CQ V2, and ComfyUI 4K
 │   └── qwen3-vl/                # Prompt worker: Qwen3-VL-32B on vLLM
+├── tests/
+│   └── handler_contract/        # The job contract every ComfyUI handler is tested against
 ├── docs/
 │   ├── builds.md                # Build and model-input instructions
+│   ├── handler-contract.md      # What a ComfyUI handler takes and answers
 │   ├── local-model-inputs.json  # Exact filenames for locally supplied weights
 │   └── source-provenance.json   # Source repositories and snapshot commits
 └── .github/workflows/check.yml  # Configuration and lightweight source checks

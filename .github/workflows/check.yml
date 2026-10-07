@@ -19,12 +19,17 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Validate supported build configurations
         run: python scripts/validate_catalog.py
-      - name: Generic worker download patch tests
+      - name: Handler test dependencies
+        run: python -m pip install --disable-pip-version-check -r services/generic-comfyui/requirements.txt
+      - name: Generic worker handler, job contract, download patch, and credit tests
         working-directory: services/generic-comfyui
-        run: python -m unittest tests.test_patch_comfy_api_download
-      - name: LTX profiles, manifests, and workflow contracts
+        run: python -m unittest tests.test_handler tests.test_backend_contract tests.test_patch_comfy_api_download tests.test_credit_estimator
+      - name: LTX handler, job contract, profiles, manifests, and workflow contracts
         working-directory: services/ltx25
-        run: python -m unittest tests.test_profiles tests.test_model_bundle tests.test_workflow_contract
+        run: python -m unittest tests.test_handler tests.test_backend_contract tests.test_profiles tests.test_model_bundle tests.test_workflow_contract
+      - name: Image workflow handler and job contract
+        working-directory: services/image-workflows
+        run: python -m unittest tests.test_handler tests.test_image_inputs tests.test_backend_contract
       - name: Prompt worker entrypoint tests
         working-directory: services/qwen3-vl
         run: python -m unittest discover -s tests

@@ -10,7 +10,7 @@ This document outlines the environment variables available for configuring the `
 | `SERVE_API_LOCALLY`  | When `true`, enables a local HTTP server simulating the RunPod environment for development and testing. See the [Development Guide](development.md#local-api) for more details.                                              | `false` |
 | `COMFY_ORG_API_KEY`  | Comfy.org API key to enable ComfyUI API Nodes. If set, it is sent with each workflow; clients can override per request via `input.comfy_org_api_key` or `input.api_key_comfy_org`.                                           | –       |
 | `INPUT_DOWNLOAD_TIMEOUT_S` | Seconds to wait for the next bytes while downloading input media from HTTP(S) URLs such as presigned S3 links. Connecting has its own limit of 10 seconds. | `300` |
-| `INPUT_DOWNLOAD_MAX_BYTES` | Largest input file fetched from a URL. The file is held in memory before it is handed to ComfyUI; a larger one fails the job. | `268435456` (256 MiB) |
+| `INPUT_DOWNLOAD_MAX_BYTES` | Largest input file fetched from a URL. The file is held in memory before it is handed to ComfyUI; a larger one fails the job. At most five redirects are followed, with their bodies left unread, and a response with a `Content-Encoding` is refused. | `268435456` (256 MiB) |
 | `COMFY_DEVICE` | `cpu` starts ComfyUI with `--cpu` and skips the GPU pre-flight check. Set by the image built from `Dockerfile.cpu`; leave unset on a GPU image. | `gpu` |
 | `WORKFLOW_EXECUTION_TIMEOUT_S` | Maximum time in seconds to wait for a queued ComfyUI workflow. On expiry, the worker requests `/interrupt` and returns a timeout error. Set to `0` to disable the watchdog.                                      | `1200`  |
 | `COMFY_API_VIDEO_DOWNLOAD_TIMEOUT_S` | Maximum time in seconds for each ComfyUI API video download attempt.                                                                                                                                    | `600`   |
@@ -28,6 +28,8 @@ This document outlines the environment variables available for configuring the `
 At `DEBUG`, which is the SDK's own default, the SDK logs each job's whole output, and with S3 upload configured that output holds the presigned result links. A presigned link is a credential for as long as it is valid (a week), so set `RUNPOD_LOG_LEVEL=DEBUG` on an endpoint only for a short diagnosis and treat that endpoint's logs accordingly. The SDK reads the variable once, at start, so a change needs new workers. Its older name, `RUNPOD_DEBUG_LEVEL`, no longer changes the level on its own.
 
 For the same reason the message of a failed node is logged, and returned in `errors` or `details`, with the query string of every URL in it cut: `https://host/path?[redacted]`. HTTP clients put the request URL into their error text, and a provider's result link is signed. The same cut is applied to the strings in `comfy_credits.details`, which are collected from the whole ComfyUI history. An unsigned URL loses its query string as well.
+
+With `BUCKET_ENDPOINT_URL` set and one of its two keys missing, a job is refused before its workflow runs: the worker could not deliver the result, and the RunPod SDK would return a path on the worker's disk as if it were the link. A video, an audio file or a text file is stored with its own content type; an input a loader node reports back, such as the clip of `LoadVideo`, is not stored or returned. The suite's [job contract](../../../docs/handler-contract.md) describes the whole answer.
 
 ## Debugging Configuration
 

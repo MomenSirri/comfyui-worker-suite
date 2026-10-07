@@ -113,6 +113,17 @@ Checked on a workstation, in the container without a GPU:
 Not checked: a job with a Comfy key, a RunPod endpoint of either kind, storage
 on R2, and how much memory a CPU worker needs.
 
+Known in `v02` and `v01`, changed in the source after them, so in the next tag:
+
+- A job whose graph loads a clip and then fails at a later node, for example at
+  a provider node, answers `success: true` with the clip it was given as its
+  only file. A caller that expects a result cannot tell this from an answer it
+  does not understand; the AZ-AI backend would keep such a job pending until
+  its age limit instead of failing it at once.
+- The answer of every video job lists an error about `animated`, and the clip a
+  job was given is stored in the bucket again beside the result.
+- A stored video has the content type `image/mp4`.
+
 ### Earlier: `momensirri/comfy-api-worker:v01`
 
 Pushed on 2026-10-07, digest
@@ -175,3 +186,9 @@ default, while the Dockerfile builds the 4-bit ones.
 
 The GitHub check workflow validates configuration and selected lightweight tests;
 it does not automatically build, publish, or deploy large GPU images.
+
+The three ComfyUI handlers are held to one job contract,
+[handler-contract.md](handler-contract.md). The check workflow runs each
+handler's unit tests and the contract cases of `tests/handler_contract`. A
+handler change that passes them still reaches an endpoint only through a new
+image tag.
