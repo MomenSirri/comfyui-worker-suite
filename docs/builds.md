@@ -175,3 +175,9 @@ default, while the Dockerfile builds the 4-bit ones.
 
 The GitHub check workflow validates configuration and selected lightweight tests;
 it does not automatically build, publish, or deploy large GPU images.
+
+The three ComfyUI handlers are held to one job contract,
+[handler-contract.md](handler-contract.md). The check workflow runs each
+handler's unit tests and the contract cases of `tests/handler_contract`. A
+handler change that passes them still reaches an endpoint only through a new
+image tag.
