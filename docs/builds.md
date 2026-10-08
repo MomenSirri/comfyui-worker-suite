@@ -121,9 +121,20 @@ Checked on a workstation, in the container without a GPU:
   goes to `DEBUG` when the variable says so.
 - The service's 86 unit and contract tests pass in the image.
 
-Not checked: a job with a Comfy key, this tag on a RunPod endpoint, storage on
-R2 through the SDK's multipart uploader, which non-image results now use, and
-how much memory a CPU worker needs.
+Checked on a RunPod CPU endpoint with an R2 bucket, on 2026-10-08, with two
+jobs that load a clip and save it, without a provider node:
+
+- The clip given inline, and the clip given by link, the link being the first
+  job's result. Both completed on a worker of this tag, after 4.5 s and 1.1 s
+  of execution.
+- Each answer was read by the AZ-AI backend's validator and accepted, with the
+  result inside the bucket the backend takes worker results from.
+- Each result is one object, stored through the SDK's multipart uploader with
+  the content type `video/mp4`. The clip a job was given did not come back.
+- The worker's log holds no signed link.
+
+Not checked: a job with a Comfy key, so no provider node has run on this tag,
+and how much memory a CPU worker needs under real provider results.
 
 ### Earlier: `momensirri/comfy-api-worker:v02`
 
