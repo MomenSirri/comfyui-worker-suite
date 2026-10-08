@@ -28,7 +28,7 @@
       "context": "services/generic-comfyui",
       "dockerfile": "Dockerfile.cpu",
       "default_tags": [
-        "momensirri/comfy-api-worker:v03"
+        "momensirri/comfy-api-worker:v04"
       ]
     },
     {
