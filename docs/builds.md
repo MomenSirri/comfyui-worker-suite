@@ -73,12 +73,45 @@ input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
 In both images the handler keeps the RunPod SDK at log level `INFO` unless
 `RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
-### Published: `momensirri/comfy-api-worker:v03`
+### Published: `momensirri/comfy-api-worker:v04`
+
+Pushed on 2026-10-08 from commit `9925c6d`, digest
+`sha256:679164ecd3408f6f26dda06fec2efb02df0da79c9d3f2963f6fa15bbca3b7b06`,
+644 MB compressed. `v03`, `v02` and `v01` stay on Docker Hub for rollback. The
+root target now defaults to the next free tag, `v05`.
+
+Against `v03`, ComfyUI's own output goes through `src/redact_log.py`, which
+cuts the query string out of every URL. ComfyUI's provider nodes log the signed
+links they are given: the first provider job on `v03` left
+`ByteDance task succeeded, image URL: …` in the worker's log, with the
+provider's link to the result, valid for a day. `COMFY_LOG_REDACT=false` passes
+the output on as it is. The handler is unchanged, and the Python packages are
+those of `v02`.
+
+Checked on a workstation, in the container without a GPU:
+
+- A probe node wrote a signed link the ways ComfyUI and its nodes do: through
+  `logging` at `INFO` and `WARNING`, with `print`, to the error stream, as a
+  progress line that ends in a carriage return, and inside a traceback. The
+  container's log holds all six with the location and without the signature.
+- The PID file names ComfyUI itself, and one filter process runs. With
+  `COMFY_LOG_REDACT=false` the same six links are in the log whole and no filter
+  runs.
+- The 43 graph variants of the 32 AZ-AI provider and region models pass
+  ComfyUI's validation and stop at the provider node without a key, and the
+  seven jobs listed for `v03` give the same results, each read by the AZ-AI
+  backend's validator.
+- The files in the image are the repository's at `9925c6d`, and the handler and
+  the filter read back from the registry are the same files.
+- The service's 96 unit and contract tests pass in the image.
+
+Not checked: this tag on a RunPod endpoint, and a provider job on it.
+
+### Earlier: `momensirri/comfy-api-worker:v03`
 
 Pushed on 2026-10-07 from `main` at `92d1215`, digest
 `sha256:31c1a4f6dc15e9566106e046e84cd157e38178ceecdd29e15dfd3ae566746acc`,
-644 MB compressed. `v02` and `v01` stay on Docker Hub for rollback. The root
-target now defaults to the next free tag, `v04`.
+644 MB compressed.
 
 Against `v02`, the handler follows the suite's
 [job contract](handler-contract.md):
@@ -133,8 +166,16 @@ jobs that load a clip and save it, without a provider node:
   the content type `video/mp4`. The clip a job was given did not come back.
 - The worker's log holds no signed link.
 
-Not checked: a job with a Comfy key, so no provider node has run on this tag,
-and how much memory a CPU worker needs under real provider results.
+One provider job followed on the same endpoint, sent by the AZ-AI backend with
+a Comfy key: a Seedream 5.0 Flash image edit with its input given by link. It
+completed after 34.6 s of execution, and the backend accepted and imported the
+result. The worker's log of that job holds the provider's signed result link,
+written by ComfyUI's own node, which `v04` cuts. On `v03`,
+`COMFY_LOG_LEVEL=WARNING` among an endpoint's variables keeps ComfyUI from
+writing that line.
+
+Not checked: a provider job that fails, a model that takes a clip with a key,
+and how much memory a CPU worker needs under larger provider results.
 
 ### Earlier: `momensirri/comfy-api-worker:v02`
 
