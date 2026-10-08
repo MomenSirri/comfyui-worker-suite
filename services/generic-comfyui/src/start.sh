@@ -80,16 +80,28 @@ echo "worker-comfyui: Starting ComfyUI"
 # PID file used by the handler to detect if ComfyUI is still running
 COMFY_PID_FILE="/tmp/comfyui.pid"
 
+# ComfyUI's own nodes log the links they are given, and a provider's result link
+# is signed. Its output goes through a filter that cuts the query string out of
+# every URL. The process substitution keeps $! the PID of ComfyUI itself.
+# COMFY_LOG_REDACT=false passes the output on as it is, for a short diagnosis.
+start_comfyui() {
+    if [ "${COMFY_LOG_REDACT:-true}" == "false" ]; then
+        python -u /comfyui/main.py --disable-auto-launch --disable-metadata "$@" --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" &
+    else
+        python -u /comfyui/main.py --disable-auto-launch --disable-metadata "$@" --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" \
+            > >(python -u /redact_log.py) 2>&1 &
+    fi
+    echo $! > "$COMFY_PID_FILE"
+}
+
 # Serve the API and don't shutdown the container
 if [ "$SERVE_API_LOCALLY" == "true" ]; then
-    python -u /comfyui/main.py --disable-auto-launch --disable-metadata --listen --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" &
-    echo $! > "$COMFY_PID_FILE"
+    start_comfyui --listen
 
     echo "worker-comfyui: Starting RunPod Handler"
     python -u /handler.py --rp_serve_api --rp_api_host=0.0.0.0
 else
-    python -u /comfyui/main.py --disable-auto-launch --disable-metadata --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" &
-    echo $! > "$COMFY_PID_FILE"
+    start_comfyui
 
     echo "worker-comfyui: Starting RunPod Handler"
     python -u /handler.py
