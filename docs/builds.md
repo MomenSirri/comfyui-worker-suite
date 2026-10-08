@@ -123,6 +123,16 @@ provider node:
 
 Not checked: a provider job on this tag.
 
+Known in `v05`: the filter cannot refuse KILL. When it is ended that way,
+ComfyUI keeps running, the PID file is right and the handler reaches it, but
+ComfyUI's own output is gone from the log from then on with no line that says
+so, and a node that flushes what it prints, prints 20 kB at once or shows a
+`tqdm` progress bar fails with `[Errno 32] Broken pipe`. Checked on a
+workstation on 2026-10-08, in the container of `v05` with a probe node added.
+Read in ComfyUI 0.39.1 and not run: its provider nodes do none of the three,
+and its samplers show a `tqdm` bar. `src/redact_log.py --keep-running` closes
+it and is in no published image yet.
+
 ### Earlier: `momensirri/comfy-api-worker:v04`
 
 Pushed on 2026-10-08 from commit `9925c6d`, digest
