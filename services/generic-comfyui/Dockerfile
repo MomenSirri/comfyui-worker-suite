@@ -131,7 +131,7 @@ ADD src/extra_model_paths.yaml ./
 WORKDIR /
 
 # Add application code and scripts
-ADD src/start.sh src/network_volume.py handler.py credit_estimator.py test_input.json ./
+ADD src/start.sh src/network_volume.py src/redact_log.py handler.py credit_estimator.py test_input.json ./
 RUN sed -i 's/\r$//' /start.sh && chmod +x /start.sh
 
 # Add script to install custom nodes

@@ -73,9 +73,14 @@ COPY src/extra_model_paths.yaml /comfyui/
 COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
 
 # The worker itself, last, so a handler change rebuilds only this small layer.
-COPY src/start.sh src/network_volume.py handler.py credit_estimator.py test_input.json /
+COPY src/start.sh src/network_volume.py src/redact_log.py handler.py credit_estimator.py test_input.json /
 RUN sed -i 's/\r$//' /start.sh /usr/local/bin/comfy-manager-set-mode \
     && chmod +x /start.sh /usr/local/bin/comfy-manager-set-mode
+
+# start.sh sends ComfyUI's output through this filter. If it could not run,
+# ComfyUI would be writing to a closed pipe, so the build tries it once.
+RUN printf 'URL: https://a.example/b.png?sig=secret\n' | python -u /redact_log.py \
+    | grep -qx 'URL: https://a.example/b.png?\[redacted\]'
 
 # start.sh skips its GPU check and passes --cpu to ComfyUI.
 ENV COMFY_DEVICE=cpu

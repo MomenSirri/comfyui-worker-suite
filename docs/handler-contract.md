@@ -97,6 +97,11 @@ A signed link is a credential for as long as it is valid.
 - The message of a failed node is logged and returned with the query string of
   every URL in it cut.
 - The line that reports an upload names the object without its signature.
+- In `generic-comfyui`, ComfyUI's own output goes through a filter that cuts the
+  query string out of every URL (`src/redact_log.py`, started by `start.sh`).
+  ComfyUI's provider nodes log the signed links they are given, for example the
+  link to a finished task's result, and a handler cannot filter what ComfyUI
+  writes. The other two services do not run provider nodes and have no filter.
 
 ## How the AZ-AI backend reads an answer
 
