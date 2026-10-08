@@ -168,10 +168,13 @@ deduplicated before upload. Core audio output descriptors remain supported.
 ## Compatibility boundary
 
 Named LTX modes use the new validated media adapter and call
-`handler(job, scan_text_artifacts=False)`. This disables the legacy global
-recent-text-file scan while keeping history-declared/inline text processing.
-It prevents another recent job's text files from being attached to a named-mode
-result. The raw workflow route retains the original default for compatibility.
+`handler(job, scan_text_artifacts=False)`. This disables the search of the
+output directory for text files while keeping history-declared/inline text
+processing. The raw workflow route keeps the search for compatibility. It
+returns a file only when it is new or changed since the workflow was queued,
+and searches nothing while ComfyUI still runs an earlier workflow, so a text
+file that another job wrote is not attached to a result (see
+`docs/handler-contract.md` at the suite root).
 
 Raw ComfyUI API graphs remain a **trusted caller** interface: the original media
 upload path permits HTTP(S) URLs and permissive base64 without the named-mode

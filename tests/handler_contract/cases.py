@@ -7,6 +7,7 @@ A service runs them from its own `tests/test_backend_contract.py`:
         entry_module = "handler"     # what the image starts
         serves_original_tools = True # behind the Upscale and Enhancement endpoints
         serves_video = False         # takes clips and returns videos
+        returns_text_files = False   # returns the text files a graph wrote
 
         def run_handler(self, job):
             return handler.handler(job)
@@ -65,12 +66,14 @@ class ContractCases:
     entry_module = "handler"
     serves_original_tools = False
     serves_video = False
+    returns_text_files = False
 
     def run_handler(self, job):
         raise NotImplementedError
 
     def setUp(self):
         self.comfy = FakeComfy(self.handler)
+        self.addCleanup(self.comfy.close)
 
     def run_job(self, job):
         result = self.comfy.run(self.run_handler, job)
@@ -102,6 +105,13 @@ class ContractCases:
         answer = json.dumps(result, default=str)
         self.assertNotIn(SIGNATURE, answer)
         self.assertNotIn(SIGNATURE, self.comfy.log)
+
+    def assert_holds_nothing_of(self, result, filename, text):
+        """Neither the answer nor the bucket holds a file this job did not write."""
+        answer = json.dumps(result, default=str)
+        self.assertNotIn(filename, answer)
+        self.assertNotIn(text, answer)
+        self.assertNotIn(text.encode("utf-8"), [item["body"] for item in self.comfy.bucket])
 
     # --- Upscale and Enhancement ----------------------------------------------
 
@@ -369,6 +379,90 @@ class ContractCases:
         answer = json.dumps(result, default=str)
         self.assertIn("timed out", answer)
         self.assertNotIn("unexpected error", answer)
+
+    # --- Text files, and the job before ---------------------------------------
+
+    def test_text_file_a_node_wrote_without_reporting_it_is_returned(self):
+        if not self.returns_text_files:
+            self.skipTest("this worker returns images only")
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+        self.comfy.writes("prompts/prompt_00001_.txt", "a prompt the graph wrote")
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assertEqual(
+            [(item["filename"], item["text"]) for item in result.get("texts", [])],
+            [("prompt_00001_.txt", "a prompt the graph wrote")],
+        )
+        self.assertIn(b"a prompt the graph wrote", [item["body"] for item in self.comfy.bucket])
+        # The backend still finds its one image beside the text file.
+        self.assert_stored(backend.settle(result, "image"), RESULT_PNG)
+
+    def test_text_file_of_the_job_before_is_not_in_the_answer(self):
+        # A worker takes one job after another, and ComfyUI's output directory
+        # is not emptied between them.
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+        self.comfy.writes("prompts/prompt_00001_.txt", "the prompt of the job before")
+        before = self.run_job(
+            backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64", job_id="job-before")
+        )
+        if self.returns_text_files:
+            self.assertEqual(
+                [item["text"] for item in before.get("texts", [])], ["the prompt of the job before"]
+            )
+
+        self.comfy = self.comfy.next_job()
+        left_behind = os.path.join(self.comfy.output_directory, "prompts", "prompt_00001_.txt")
+        self.assertTrue(os.path.isfile(left_behind))
+        self.comfy.saves("9", "ComfyUI_00002_.png", RESULT_PNG)
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_holds_nothing_of(result, "prompt_00001_.txt", "the prompt of the job before")
+        self.assert_stored(backend.settle(result, "image"), RESULT_PNG)
+        self.assertEqual(len(self.comfy.bucket), 1)
+
+    def test_text_file_a_node_writes_again_is_returned_as_this_job_wrote_it(self):
+        if not self.returns_text_files:
+            self.skipTest("this worker returns images only")
+        self.comfy.writes("prompts/latest.txt", "the prompt of the job before")
+        self.run_job(
+            backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64", job_id="job-before")
+        )
+
+        self.comfy = self.comfy.next_job()
+        self.comfy.writes("prompts/latest.txt", "the prompt of this job")
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assertEqual(
+            [item["text"] for item in result.get("texts", [])], ["the prompt of this job"]
+        )
+
+    def test_text_file_an_abandoned_graph_writes_meanwhile_is_not_in_the_answer(self):
+        # A handler that gave up on its graph leaves it running, and ComfyUI
+        # goes on with it before it starts the next job's.
+        self.comfy.still_runs_an_earlier_graph(
+            "prompts/prompt_00001_.txt", "the prompt of an abandoned job"
+        )
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_holds_nothing_of(result, "prompt_00001_.txt", "the prompt of an abandoned job")
+        self.assert_stored(backend.settle(result, "image"), RESULT_PNG)
+        self.assertEqual(len(self.comfy.bucket), 1)
+
+    def test_job_completes_when_the_queue_of_comfyui_cannot_be_read(self):
+        # Without the queue nothing says whose a text file on disk is, so none
+        # is returned. The job's result does not depend on it.
+        self.comfy.queue_readable = False
+        self.comfy.saves("9", "ComfyUI_00001_.png", RESULT_PNG)
+        self.comfy.writes("prompts/prompt_00001_.txt", "a prompt the graph wrote")
+
+        result = self.run_job(backend.studio_job(IMAGE_GRAPH, [("azai_in_1.png", PNG)], "base64"))
+
+        self.assert_stored(backend.settle(result, "image"), RESULT_PNG)
+        self.assert_holds_nothing_of(result, "prompt_00001_.txt", "a prompt the graph wrote")
+        self.assertFalse(result.get("errors"), result.get("errors"))
 
     # --- The worker's own log -------------------------------------------------
 

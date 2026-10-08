@@ -62,6 +62,11 @@ A job that produced its file answers with it under the key of its kind:
   clip as an output of type `input`; no handler stores or returns it.
 - A file that two nodes report is stored and returned once. A file without
   bytes is not a result.
+- `generic-comfyui` and `ltx25` also return a graph's text files (`.txt`,
+  `.md`, `.json`, `.csv`, `.log`): the text under `texts` and, with a bucket,
+  a link under `files`. That is a file the history reports, and a file a node
+  wrote into ComfyUI's output directory without reporting it. The AZ-AI
+  backend reads neither.
 - `image-workflows` also answers `status: "success"` and `message`, the list of
   the same links. That was its whole answer in earlier releases, and it is kept
   for callers that still read it. Without a bucket this sends each inline
@@ -103,6 +108,26 @@ A signed link is a credential for as long as it is valid.
   link to a finished task's result, and a handler cannot filter what ComfyUI
   writes. The other two services do not run provider nodes and have no filter.
 
+A worker takes one job after another, and the next one may be another user's.
+ComfyUI's output directory is not emptied between them.
+
+- A text file is taken from that directory only when it is new or changed
+  since the job's graph was queued. The handler records the directory's text
+  files, with size and modification time, before it queues the graph. What the
+  job before left there is never returned, however recent it is.
+- When ComfyUI still has a graph running or waiting as the job's own is about
+  to be queued, or its queue cannot be read, the directory is not searched for
+  that job. A graph that an earlier job gave up on, at the run-time limit or
+  over a lost connection, may still write its files, and nothing on disk tells
+  them from this job's. The directory is not searched either when a part of
+  it could not be read for the record. What the history reports is returned as
+  always, and the job's other results do not depend on any of this.
+- A file the graph writes again is returned as it then is. A graph that adds
+  to one file on every job gets back what earlier jobs added to it; a graph
+  that serves more than one user writes a new file per job.
+- `ltx25` does not search the directory for a job with a `mode`, and
+  `image-workflows` never does.
+
 ## How the AZ-AI backend reads an answer
 
 | Job | Reading | Accepted |
@@ -133,6 +158,7 @@ Which delivery a Studio worker gets is set in the backend's `STUDIO_WORKERS`
 | Behind | the Studio's provider models | the Studio's LTX models | Upscale, Enhancement, the Studio's FLUX.2 Klein modes |
 | Images inline or by link | yes | yes | yes |
 | Clips, video results | yes | yes | no |
+| Text files a graph wrote | yes | yes, without a `mode` also from the output directory | no |
 | Run-time limit (`WORKFLOW_EXECUTION_TIMEOUT_S`) | 1200 s | 1200 s | off unless set |
 | Recycles the worker after a failed job | no | yes | yes (`REFRESH_WORKER_ON_FAILURE`) |
 

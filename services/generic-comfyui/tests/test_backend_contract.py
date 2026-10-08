@@ -18,6 +18,7 @@ class TestBackendContract(ContractCases, unittest.TestCase):
 
     handler = handler
     serves_video = True
+    returns_text_files = True
 
     def run_handler(self, job):
         return handler.handler(job)
