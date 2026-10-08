@@ -307,6 +307,7 @@ class TestRunpodWorkerComfy(unittest.TestCase):
         with (
             patch("handler.check_server", return_value=True),
             patch("handler.websocket.WebSocket", return_value=websocket_client),
+            patch("handler.snapshot_text_artifacts", return_value={}),
             patch("handler.queue_workflow", return_value={"prompt_id": prompt_id}),
             patch("handler.get_history", return_value=history) as mock_get_history,
             patch("handler.wait_for_prompt_history", return_value=history),
@@ -467,7 +468,7 @@ class TestRunpodWorkerComfy(unittest.TestCase):
                 file_handle.write(b"SCENE CONTEXT\nPrompt from disk")
 
             text_outputs, errors = handler.collect_text_artifacts(
-                {}, "job-123", output_dir=temp_dir, min_mtime=0
+                {}, "job-123", output_dir=temp_dir, known_files={}
             )
 
         self.assertEqual(errors, [])
@@ -476,6 +477,137 @@ class TestRunpodWorkerComfy(unittest.TestCase):
         self.assertEqual(text_outputs["texts"][0]["filename"], "seedance_prompt_00001.txt")
         self.assertEqual(text_outputs["texts"][0]["subfolder"], "seedance_prompt_outputs")
         self.assertEqual(text_outputs["texts"][0]["text"], "SCENE CONTEXT\nPrompt from disk")
+
+    def _write_output_text(self, output_dir, name, text):
+        text_path = os.path.join(output_dir, name)
+        with open(text_path, "wb") as file_handle:
+            file_handle.write(text)
+        return text_path
+
+    def _snapshot_of_idle_worker(self, output_dir):
+        with patch("handler._comfyui_queue_is_empty", return_value=True):
+            return handler.snapshot_text_artifacts(output_dir)
+
+    @patch.dict(os.environ, {"BUCKET_ENDPOINT_URL": ""})
+    def test_collect_text_artifacts_leaves_out_the_file_of_an_earlier_job(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_output_text(temp_dir, "prompt_00001.txt", b"Prompt of the job before")
+            # The next job starts at once: no file is newer than that one.
+            known_files = self._snapshot_of_idle_worker(temp_dir)
+            self._write_output_text(temp_dir, "prompt_00002.txt", b"Prompt of this job")
+
+            text_outputs, errors = handler.collect_text_artifacts(
+                {}, "job-123", output_dir=temp_dir, known_files=known_files
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            [(item["filename"], item["text"]) for item in text_outputs["texts"]],
+            [("prompt_00002.txt", "Prompt of this job")],
+        )
+
+    @patch.dict(os.environ, {"BUCKET_ENDPOINT_URL": ""})
+    def test_collect_text_artifacts_returns_a_file_the_workflow_wrote_again(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_output_text(temp_dir, "latest.txt", b"Prompt of the job before")
+            known_files = self._snapshot_of_idle_worker(temp_dir)
+            self._write_output_text(temp_dir, "latest.txt", b"Prompt of this job")
+
+            text_outputs, errors = handler.collect_text_artifacts(
+                {}, "job-123", output_dir=temp_dir, known_files=known_files
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            [item["text"] for item in text_outputs["texts"]], ["Prompt of this job"]
+        )
+
+    @patch.dict(os.environ, {"BUCKET_ENDPOINT_URL": ""})
+    def test_collect_text_artifacts_returns_a_rewritten_file_of_the_same_size(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            text_path = self._write_output_text(temp_dir, "latest.txt", b"Prompt A")
+            known_files = self._snapshot_of_idle_worker(temp_dir)
+            before = os.stat(text_path)
+            self._write_output_text(temp_dir, "latest.txt", b"Prompt B")
+            # Whatever the clock's step, the second write is the later one.
+            os.utime(text_path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+
+            text_outputs, errors = handler.collect_text_artifacts(
+                {}, "job-123", output_dir=temp_dir, known_files=known_files
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual([item["text"] for item in text_outputs["texts"]], ["Prompt B"])
+
+    @patch.dict(os.environ, {"BUCKET_ENDPOINT_URL": ""})
+    def test_collect_text_artifacts_does_not_search_an_unrecorded_output_folder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_output_text(temp_dir, "prompt_00001.txt", b"Prompt of some job")
+
+            text_outputs, errors = handler.collect_text_artifacts(
+                {}, "job-123", output_dir=temp_dir
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(text_outputs, {"files": [], "texts": []})
+
+    def test_snapshot_text_artifacts_records_the_text_files_of_an_idle_worker(self):
+        idle_queue = MagicMock()
+        idle_queue.json.return_value = {"queue_running": [], "queue_pending": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            text_path = self._write_output_text(temp_dir, "prompt_00001.txt", b"Prompt")
+            self._write_output_text(temp_dir, "image_00001.png", b"not a text file")
+            with patch("handler.requests.get", return_value=idle_queue) as mock_get:
+                known_files = handler.snapshot_text_artifacts(temp_dir)
+
+        self.assertEqual(list(known_files), [text_path])
+        self.assertTrue(mock_get.call_args.args[0].endswith("/queue"))
+
+    def test_snapshot_text_artifacts_of_a_missing_output_folder_is_empty(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_dir = os.path.join(temp_dir, "output")
+            known_files = self._snapshot_of_idle_worker(missing_dir)
+
+        self.assertEqual(known_files, {})
+
+    def test_snapshot_text_artifacts_is_not_taken_when_a_file_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_output_text(temp_dir, "prompt_00001.txt", b"Prompt")
+            try:
+                os.symlink(
+                    os.path.join(temp_dir, "gone.txt"), os.path.join(temp_dir, "link.txt")
+                )
+            except OSError:
+                self.skipTest("this platform does not let the test make a symbolic link")
+
+            # A file missing from the record would pass for new afterwards.
+            self.assertIsNone(self._snapshot_of_idle_worker(temp_dir))
+
+    def test_snapshot_text_artifacts_is_not_taken_while_comfyui_runs_a_workflow(self):
+        for queue in (
+            {"queue_running": [[0, "prompt-0", {}, {}, []]], "queue_pending": []},
+            {"queue_running": [], "queue_pending": [[1, "prompt-1", {}, {}, []]]},
+            {"error": "not found"},
+            [],
+        ):
+            with self.subTest(queue=queue), tempfile.TemporaryDirectory() as temp_dir:
+                busy_queue = MagicMock()
+                busy_queue.json.return_value = queue
+                with patch("handler.requests.get", return_value=busy_queue):
+                    self.assertIsNone(handler.snapshot_text_artifacts(temp_dir))
+
+    def test_snapshot_text_artifacts_is_not_taken_when_the_queue_cannot_be_read(self):
+        unreadable = MagicMock()
+        unreadable.json.side_effect = ValueError("not JSON")
+
+        for get in (
+            MagicMock(side_effect=handler.requests.ConnectionError("refused")),
+            MagicMock(return_value=unreadable),
+        ):
+            with self.subTest(get=get), tempfile.TemporaryDirectory() as temp_dir:
+                with patch("handler.requests.get", get):
+                    self.assertIsNone(handler.snapshot_text_artifacts(temp_dir))
 
     @patch.dict(os.environ, {"BUCKET_ENDPOINT_URL": ""})
     def test_collect_text_artifacts_reads_inline_history_text(self):

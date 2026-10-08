@@ -12,6 +12,8 @@ import io
 import json
 import logging
 import os
+import shutil
+import tempfile
 import time
 import urllib.parse
 from unittest.mock import patch
@@ -128,11 +130,13 @@ class _Socket:
 class FakeComfy:
     """ComfyUI, the input links and the result bucket of one job."""
 
-    def __init__(self, handler_module):
+    def __init__(self, handler_module, output_directory=None):
         self._handler = handler_module
         self._links = {}
         self._files = {}
         self._outputs = {}
+        self._unreported_files = {}
+        self._earlier_graph_files = {}
         self._failure = None
         self._clock = 0.0
         # A graph that never reports its end, to try the run-time limit.
@@ -143,6 +147,8 @@ class FakeComfy:
         self.storage_configured = True
         # Text of the error the bucket refuses every upload with.
         self.storage_error = None
+        # False lets ComfyUI answer a question about its queue with an error.
+        self.queue_readable = True
 
         # What the job left behind.
         self.input_directory = {}
@@ -152,6 +158,17 @@ class FakeComfy:
         self.progress = []
         self.interrupted = False
         self.log = ""
+        # ComfyUI's output directory. A worker keeps it from one job to the next.
+        self._owns_output_directory = output_directory is None
+        self.output_directory = output_directory or tempfile.mkdtemp(prefix="comfy-output-")
+
+    def close(self):
+        if self._owns_output_directory:
+            shutil.rmtree(self.output_directory, ignore_errors=True)
+
+    def next_job(self):
+        """ComfyUI as the next job on the same worker finds it: its disk as it was left."""
+        return FakeComfy(self._handler, self.output_directory)
 
     # --- Setting up one job ---------------------------------------------------
 
@@ -179,6 +196,18 @@ class FakeComfy:
     def says(self, node_id, text):
         """Let a node leave a text output beside any files."""
         self._outputs.setdefault(str(node_id), {})["text"] = [text]
+
+    def writes(self, path, text):
+        """Let a node write a text file into the output directory without reporting it."""
+        self._unreported_files[path] = text
+
+    def still_runs_an_earlier_graph(self, path, text):
+        """Let the graph of an earlier job go on while this job runs, and write a text file.
+
+        A handler that gave up on its graph, at the run-time limit or over a
+        lost connection, leaves it to ComfyUI, which takes one graph at a time.
+        """
+        self._earlier_graph_files[path] = text
 
     def fails_at(self, node_id, node_type, message):
         """Let a node raise while the graph runs."""
@@ -230,6 +259,9 @@ class FakeComfy:
             stack.enter_context(patch.object(requests, "post", self._post))
             stack.enter_context(patch.object(websocket, "WebSocket", lambda *_a, **_k: _Socket(self)))
             stack.enter_context(patch.object(time, "sleep", lambda _seconds: None))
+            stack.enter_context(
+                patch.object(self._handler, "COMFY_OUTPUT_DIR", self.output_directory, create=True)
+            )
             if self.never_finishes:
                 stack.enter_context(patch.object(time, "monotonic", self._tick))
             stack.enter_context(
@@ -271,6 +303,10 @@ class FakeComfy:
 
         if parts.path in ("/", "/object_info", "/system_stats"):
             return _json(url, {})
+        if parts.path == "/queue":
+            if not self.queue_readable:
+                return _json(url, {"error": "internal server error"}, status=500)
+            return _json(url, self._queue())
         if parts.path == f"/history/{PROMPT_ID}":
             return _json(url, self._history())
         if parts.path == "/view":
@@ -291,11 +327,32 @@ class FakeComfy:
             return _json(url, {"name": name, "subfolder": "", "type": "input"})
         if parts.path == "/prompt":
             self.queued.append(json.loads(options["data"]))
+            # The graphs run from here on: first the earlier one, then this job's.
+            self._write_to_output_directory(self._earlier_graph_files)
+            self._write_to_output_directory(self._unreported_files)
             return _json(url, {"prompt_id": PROMPT_ID, "number": 1, "node_errors": {}})
         if parts.path == "/interrupt":
             self.interrupted = True
             return _json(url, {})
         return _json(url, {"error": "not found"}, status=404)
+
+    def _queue(self):
+        # ComfyUI runs one graph at a time. An earlier graph has ended by the
+        # time this job's is reported; this job's stays listed from then on.
+        if self.queued:
+            running = [[1, PROMPT_ID, {}, {}, []]]
+        elif self._earlier_graph_files:
+            running = [[0, "prompt-0000", {}, {}, []]]
+        else:
+            running = []
+        return {"queue_running": running, "queue_pending": []}
+
+    def _write_to_output_directory(self, files):
+        for path, text in files.items():
+            target = os.path.join(self.output_directory, *path.split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as written:
+                written.write(text)
 
     def _history(self):
         if not self.queued:
