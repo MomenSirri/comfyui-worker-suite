@@ -94,6 +94,17 @@ start_comfyui() {
     echo $! > "$COMFY_PID_FILE"
 }
 
+# A filter that cannot run would leave ComfyUI writing to a closed pipe, with the
+# worker looking alive. Try it before ComfyUI is given its pipe, and do not
+# start without it: the alternative would be an unfiltered log.
+if [ "${COMFY_LOG_REDACT:-true}" != "false" ]; then
+    filtered="$(printf 'probe https://a.example/b.png?sig=secret\n' | python -u /redact_log.py 2>/dev/null)"
+    if [ "$filtered" != 'probe https://a.example/b.png?[redacted]' ]; then
+        echo "worker-comfyui: the log filter /redact_log.py does not work; not starting ComfyUI without it" >&2
+        exit 1
+    fi
+fi
+
 # Serve the API and don't shutdown the container
 if [ "$SERVE_API_LOCALLY" == "true" ]; then
     start_comfyui --listen
