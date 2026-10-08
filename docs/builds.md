@@ -73,12 +73,61 @@ input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
 In both images the handler keeps the RunPod SDK at log level `INFO` unless
 `RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
-### Published: `momensirri/comfy-api-worker:v04`
+### Published: `momensirri/comfy-api-worker:v05`
+
+Pushed on 2026-10-08 from commit `5c47ba6`, digest
+`sha256:c862d71496dd102b8d2d439312a381f12938bac9d07a1075c3a08e61a5de752e`,
+644 MB compressed. The earlier tags stay on Docker Hub for rollback. The root
+target now defaults to the next free tag, `v06`.
+
+Against `v04`, the log filter stays for as long as ComfyUI writes:
+
+- It ignores INT, TERM, HUP and QUIT and keeps reading when its own output can
+  no longer be written. It ends at the end of its input only.
+- `start.sh` tries the filter before ComfyUI is given its pipe and does not
+  start ComfyUI when the filter does not work.
+- It writes until every byte is taken, passes on everything up to the last byte
+  that ends a query string, so a progress line no longer waits for the next
+  line end, and does not search output that holds no question mark.
+
+The handler is unchanged, and the Python packages are those of `v02`.
+
+Checked on a workstation, in the container without a GPU:
+
+- The probe node of `v04`: its six signed links are in the container's log with
+  the location and without the signature, the PID file names ComfyUI, and one
+  filter process runs.
+- After INT, TERM and HUP sent to the filter itself it is still running and
+  ComfyUI answers. With a filter file that cannot run, the container exits with
+  status 1 and says why. `v04` fails both.
+- With `COMFY_LOG_REDACT=false` the six links are in the log whole and no filter
+  runs.
+- The 43 graph variants of the 32 AZ-AI provider and region models, and the
+  seven jobs read by the AZ-AI backend's validator, as for `v03`.
+- The files in the image are the repository's at `5c47ba6`, and the filter and
+  `start.sh` read back from the registry are the same files.
+- The service's 101 unit and contract tests pass in the image.
+
+Checked on a RunPod CPU endpoint with an R2 bucket, on 2026-10-08, without a
+provider node:
+
+- Two jobs that load a clip and save it, the clip given inline and by link, both
+  completed on a worker of this tag. Each result is one `video/mp4` object,
+  accepted by the AZ-AI backend's validator.
+- A graph that ComfyUI refuses, naming an input file whose name ends like a
+  signed link with a made-up signature: ComfyUI's own line in the worker's log
+  has the query string cut. The handler's lines repeat ComfyUI's refusal as it
+  is, name included; a graph the backend sends holds no link.
+- With `COMFY_LOG_LEVEL` not set, ComfyUI's own `INFO` and `DEBUG` lines are in
+  the log, and no line holds a signed link of the bucket.
+
+Not checked: a provider job on this tag.
+
+### Earlier: `momensirri/comfy-api-worker:v04`
 
 Pushed on 2026-10-08 from commit `9925c6d`, digest
 `sha256:679164ecd3408f6f26dda06fec2efb02df0da79c9d3f2963f6fa15bbca3b7b06`,
-644 MB compressed. `v03`, `v02` and `v01` stay on Docker Hub for rollback. The
-root target now defaults to the next free tag, `v05`.
+644 MB compressed.
 
 Against `v03`, ComfyUI's own output goes through `src/redact_log.py`, which
 cuts the query string out of every URL. ComfyUI's provider nodes log the signed
@@ -105,7 +154,13 @@ Checked on a workstation, in the container without a GPU:
   the filter read back from the registry are the same files.
 - The service's 96 unit and contract tests pass in the image.
 
-Not checked: this tag on a RunPod endpoint, and a provider job on it.
+It ran on a RunPod endpoint for an hour on 2026-10-08, where two clip jobs
+completed and ComfyUI's own line about a refused graph came out with its query
+string cut. Not checked: a provider job on it.
+
+Known in `v04`: a signal sent to the filter itself, or its output closing, ends
+the filter while ComfyUI keeps running and then writes to a closed pipe, and a
+filter that cannot run is not noticed at start.
 
 ### Earlier: `momensirri/comfy-api-worker:v03`
 
