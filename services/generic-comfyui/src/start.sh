@@ -83,13 +83,18 @@ COMFY_PID_FILE="/tmp/comfyui.pid"
 # ComfyUI's own nodes log the links they are given, and a provider's result link
 # is signed. Its output goes through a filter that cuts the query string out of
 # every URL. The process substitution keeps $! the PID of ComfyUI itself.
+# --keep-running puts a keeper on the pipe: it runs the filter, and when a filter
+# ends while ComfyUI still writes, it says so in the log and starts the next one.
+# The pipe stays open meanwhile, so no write of ComfyUI fails for it. When
+# filters keep ending at once, ComfyUI's output is dropped for a minute before
+# the next try; it is never passed on unfiltered.
 # COMFY_LOG_REDACT=false passes the output on as it is, for a short diagnosis.
 start_comfyui() {
     if [ "${COMFY_LOG_REDACT:-true}" == "false" ]; then
         python -u /comfyui/main.py --disable-auto-launch --disable-metadata "$@" --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" &
     else
         python -u /comfyui/main.py --disable-auto-launch --disable-metadata "$@" --verbose "${COMFY_LOG_LEVEL}" --log-stdout "${COMFY_DEVICE_ARGS[@]}" \
-            > >(python -u /redact_log.py) 2>&1 &
+            > >(python -u /redact_log.py --keep-running) 2>&1 &
     fi
     echo $! > "$COMFY_PID_FILE"
 }
@@ -98,7 +103,7 @@ start_comfyui() {
 # worker looking alive. Try it before ComfyUI is given its pipe, and do not
 # start without it: the alternative would be an unfiltered log.
 if [ "${COMFY_LOG_REDACT:-true}" != "false" ]; then
-    filtered="$(printf 'probe https://a.example/b.png?sig=secret\n' | python -u /redact_log.py 2>/dev/null)"
+    filtered="$(printf 'probe https://a.example/b.png?sig=secret\n' | python -u /redact_log.py --keep-running 2>/dev/null)"
     if [ "$filtered" != 'probe https://a.example/b.png?[redacted]' ]; then
         echo "worker-comfyui: the log filter /redact_log.py does not work; not starting ComfyUI without it" >&2
         exit 1

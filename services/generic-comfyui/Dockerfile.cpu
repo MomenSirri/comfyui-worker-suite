@@ -78,8 +78,9 @@ RUN sed -i 's/\r$//' /start.sh /usr/local/bin/comfy-manager-set-mode \
     && chmod +x /start.sh /usr/local/bin/comfy-manager-set-mode
 
 # start.sh sends ComfyUI's output through this filter. If it could not run,
-# ComfyUI would be writing to a closed pipe, so the build tries it once.
-RUN printf 'URL: https://a.example/b.png?sig=secret\n' | python -u /redact_log.py \
+# ComfyUI would be writing to a closed pipe, so the build tries it once, the
+# way start.sh runs it.
+RUN printf 'URL: https://a.example/b.png?sig=secret\n' | python -u /redact_log.py --keep-running \
     | grep -qx 'URL: https://a.example/b.png?\[redacted\]'
 
 # start.sh skips its GPU check and passes --cpu to ComfyUI.
