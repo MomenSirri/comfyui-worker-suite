@@ -73,12 +73,86 @@ input is held in memory and limited by `INPUT_DOWNLOAD_MAX_BYTES` (256 MiB).
 In both images the handler keeps the RunPod SDK at log level `INFO` unless
 `RUNPOD_LOG_LEVEL` is set; at `DEBUG` the SDK logs the signed result links.
 
-### Published: `momensirri/comfy-api-worker:v05`
+### Published: `momensirri/comfy-api-worker:v07`
+
+Pushed on 2026-10-09 from `main` at `c8199ef`, digest
+`sha256:ec9bea2c80ee31af78b40edf9a05846f43b340534ffdafdfecd08adf20f4462a`,
+644 MB compressed. The earlier tags stay on Docker Hub for rollback. The root
+target now defaults to the next free tag, `v08`.
+
+Against `v06`, a log filter that ended is replaced, instead of leaving ComfyUI
+on a pipe that nothing reads:
+
+- `start.sh` runs `redact_log.py --keep-running`. The keeper holds the pipe and
+  runs the filter under it, so ComfyUI's output waits in the pipe while no
+  filter runs, and no write of ComfyUI fails for it.
+- A filter that ended is reported in the worker's log, in a line that begins
+  `worker-comfyui: the log filter ended`, and replaced by one that drops the
+  word it starts in: that word may be the rest of a query string.
+- Filters that end three times in a row within ten seconds of their start are
+  left out for a minute, ComfyUI's output dropped meanwhile, and then tried
+  again. Nothing is passed on unfiltered.
+
+The handler and the Python packages are those of `v06`.
+
+Checked on a workstation, in the container without a GPU:
+
+- A probe node writes a signed link through `logging`, `print`, the error
+  stream and a chained aiohttp `ClientResponseError`. Every one is in the
+  container's log with the location and without the signature. The PID file
+  names ComfyUI in both `SERVE_API_LOCALLY` branches, and a keeper and one
+  filter run.
+- After KILL to the filter a replacement runs, ComfyUI answers, and the jobs
+  that fail on `v05` complete: a node that flushes what it prints, prints 20 kB
+  at once or shows a `tqdm` bar. ComfyUI's lines keep arriving with the link
+  cut, and one line says what happened.
+- With ComfyUI itself killed, keeper and filter end and the handler reports
+  that ComfyUI cannot be reached. With a filter file that cannot run, the
+  container exits with status 1 and says why. With `COMFY_LOG_REDACT=false` the
+  links are in the log whole and neither keeper nor filter runs.
+- The 43 graph variants of the 32 AZ-AI provider and region models, and the
+  seven jobs read by the AZ-AI backend's validator, as for `v03`.
+- The files in the image are the repository's at `c8199ef`, and the filter,
+  `start.sh` and the handler read back from the registry are the same files.
+  `test_input.json` differs by its line ends only: the checkout on the build
+  workstation has CRLF there, and `v06` holds the same file.
+- The service's 139 unit and contract tests pass in the image.
+
+Checked with these files in the container of `v01`, before the build: a filter
+that cannot start any more is left out while jobs keep completing, and is back
+within its minute once it can start again.
+
+Not checked: a RunPod endpoint, a provider job, a kill by the kernel for
+memory, and the GPU image, where a sampler's `tqdm` bar is what a lost filter
+would break.
+
+Known in `v07`: when keeper and filter are both ended, one after the other, the
+worker is where `v05` is after its filter ended. A line the filter was reading
+at the moment it ended can be lost.
+
+### Earlier: `momensirri/comfy-api-worker:v06`
+
+Digest
+`sha256:f0c97b5e873f5890df490504c44f8d7636eb1a8ac8d9a0409d9b60c55b57423a`,
+644 MB compressed, built on 2026-10-08. This entry was written on 2026-10-09
+from the registry and the image, not by the session that built it: the tag was
+on Docker Hub while the root target still named `v06` as the next free tag.
+
+Read from the image: its handler, `start.sh` and the filter are the
+repository's at `d97d8d7`, and its Python packages are those of `v07`. Against
+`v05` that is the handler that keeps another job's text files out of a job's
+answer, as the [job contract](handler-contract.md) describes it. The log filter
+is that of `v05`.
+
+Not known here: what was checked on this tag before it was pushed.
+
+Known in `v06`: what is known in `v05` about a filter that is ended with KILL.
+
+### Earlier: `momensirri/comfy-api-worker:v05`
 
 Pushed on 2026-10-08 from commit `5c47ba6`, digest
 `sha256:c862d71496dd102b8d2d439312a381f12938bac9d07a1075c3a08e61a5de752e`,
-644 MB compressed. The earlier tags stay on Docker Hub for rollback. The root
-target now defaults to the next free tag, `v06`.
+644 MB compressed.
 
 Against `v04`, the log filter stays for as long as ComfyUI writes:
 
@@ -130,8 +204,7 @@ so, and a node that flushes what it prints, prints 20 kB at once or shows a
 `tqdm` progress bar fails with `[Errno 32] Broken pipe`. Checked on a
 workstation on 2026-10-08, in the container of `v05` with a probe node added.
 Read in ComfyUI 0.39.1 and not run: its provider nodes do none of the three,
-and its samplers show a `tqdm` bar. `src/redact_log.py --keep-running` closes
-it and is in no published image yet.
+and its samplers show a `tqdm` bar. `v07` closes it.
 
 ### Earlier: `momensirri/comfy-api-worker:v04`
 
