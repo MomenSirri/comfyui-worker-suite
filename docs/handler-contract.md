@@ -102,6 +102,10 @@ A signed link is a credential for as long as it is valid.
 - The message of a failed node is logged and returned with the query string of
   every URL in it cut.
 - The line that reports an upload names the object without its signature.
+- `generic-comfyui` and `ltx25` patch ComfyUI's download helper while the image
+  is built (`src/patch_comfy_api_download.py`). A provider download that fails
+  there reports the link with its query string cut, and its error does not chain
+  the HTTP client's own error, whose text and traceback name the whole link.
 - In `generic-comfyui`, ComfyUI's own output goes through a filter that cuts the
   query string out of every URL (`src/redact_log.py`, started by `start.sh`).
   ComfyUI's provider nodes log the signed links they are given, for example the

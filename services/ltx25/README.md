@@ -123,6 +123,8 @@ Copy [.env.example](.env.example) to a private environment file or configure Run
 | `MAX_OUTPUT_PIXELS` | Final resolution cap after upscaling/padding; default 1920×1088 pixels |
 | `MAX_INLINE_OUTPUT_BYTES` / `MAX_RESULT_BYTES` | 5 MiB per binary artifact / 8 MiB named-mode JSON result; use S3 for videos |
 
+A signed link is a credential for as long as it is valid. `RUNPOD_LOG_LEVEL` needs no rebuild: set on an endpoint, it applies to any image once its workers restart. The message of a failed node is logged and returned with the query string of every URL cut (`https://host/path?[redacted]`). The image's patch of ComfyUI's download helper ([src/patch_comfy_api_download.py](src/patch_comfy_api_download.py)) cuts it from a failed provider download as well and does not chain the HTTP client's own error, which names the whole link. ComfyUI's own output is not filtered in this image: the named modes run no provider nodes, and a custom workflow that does can still have its links logged by those nodes.
+
 The pinned Runpod uploader preserves your original **monthly `MM-YY` bucket convention** and original Runpod job-ID key prefix. It does not introduce an invented bucket-name setting. Ensure your existing endpoint/permissions support that behavior, including month rollover. [Integration audit](docs/existing-integration.md)
 
 Generate a complete mixed-source first/last payload:
