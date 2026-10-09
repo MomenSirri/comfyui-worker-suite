@@ -103,9 +103,6 @@ TEXT_ARTIFACT_MAX_INLINE_BYTES = int(
 TEXT_ARTIFACT_SCAN_MAX_FILES = int(
     os.environ.get("TEXT_ARTIFACT_SCAN_MAX_FILES", 100)
 )
-TEXT_ARTIFACT_SCAN_MTIME_GRACE_S = float(
-    os.environ.get("TEXT_ARTIFACT_SCAN_MTIME_GRACE_S", 5)
-)
 CREDIT_KEYWORDS = (
     "credit",
     "credits",
@@ -1287,20 +1284,32 @@ def _discover_text_artifacts_from_history(outputs):
     return artifacts
 
 
-def _discover_text_artifacts_from_output_dir(output_dir, min_mtime=None):
-    if not output_dir or not os.path.isdir(output_dir):
-        print(
-            "worker-comfyui - Text artifact scan skipped; output directory "
-            f"does not exist: {output_dir}"
-        )
-        return []
+def _comfyui_queue_is_empty():
+    """Whether ComfyUI has no workflow running and none waiting to run."""
+    try:
+        response = requests.get(f"http://{COMFY_HOST}/queue", timeout=10)
+        response.raise_for_status()
+        queue = response.json()
+    except (requests.RequestException, ValueError) as queue_err:
+        print(f"worker-comfyui - Could not read ComfyUI's queue: {queue_err}")
+        return False
 
-    cutoff_mtime = None
-    if min_mtime is not None:
-        cutoff_mtime = max(0, min_mtime - TEXT_ARTIFACT_SCAN_MTIME_GRACE_S)
+    if not isinstance(queue, dict):
+        return False
+    return queue.get("queue_running") == [] and queue.get("queue_pending") == []
 
-    candidates = []
-    for root, dirs, files in os.walk(output_dir):
+
+def _raise_os_error(os_error):
+    raise os_error
+
+
+def _iter_text_artifact_files(output_dir, strict=False):
+    """Yield each text file under the output directory with its stat result.
+
+    A folder or file that cannot be read is skipped, or raised when `strict`.
+    """
+    on_walk_error = _raise_os_error if strict else None
+    for root, dirs, files in os.walk(output_dir, onerror=on_walk_error):
         dirs[:] = [dirname for dirname in dirs if not dirname.startswith(".")]
         for filename in files:
             if not _is_text_artifact(filename):
@@ -1310,16 +1319,83 @@ def _discover_text_artifacts_from_output_dir(output_dir, min_mtime=None):
             try:
                 stat_result = os.stat(file_path)
             except OSError as stat_err:
+                if strict:
+                    raise
                 print(
                     "worker-comfyui - Could not stat text artifact candidate "
                     f"{file_path}: {stat_err}"
                 )
                 continue
 
-            if cutoff_mtime is not None and stat_result.st_mtime < cutoff_mtime:
-                continue
+            yield file_path, stat_result
 
-            candidates.append((stat_result.st_mtime, file_path))
+
+def _text_artifact_state(stat_result):
+    return (stat_result.st_mtime_ns, stat_result.st_size)
+
+
+def snapshot_text_artifacts(output_dir=COMFY_OUTPUT_DIR):
+    """
+    Record the text files of the output directory before a workflow is queued.
+
+    The directory is not emptied between jobs, so a file in it belongs to the
+    job that follows only if it is new or changed since this record. A file's
+    time cannot decide that: the job before may have written it a moment ago.
+
+    Returns None when ComfyUI is not idle. A workflow that an earlier job gave
+    up on may still write its files while the next one waits, and nothing on
+    disk tells the two apart; the directory is then not searched for this job.
+    The same holds when a part of the directory cannot be read: a file missing
+    from the record would pass for new.
+    """
+    if not _comfyui_queue_is_empty():
+        print(
+            "worker-comfyui - ComfyUI is not known to be idle before this "
+            "workflow; text files on disk will not be returned for it."
+        )
+        return None
+
+    if not output_dir or not os.path.isdir(output_dir):
+        return {}
+
+    try:
+        return {
+            file_path: _text_artifact_state(stat_result)
+            for file_path, stat_result in _iter_text_artifact_files(
+                output_dir, strict=True
+            )
+        }
+    except OSError as record_err:
+        print(
+            "worker-comfyui - Could not record the output directory before "
+            "this workflow; text files on disk will not be returned for it: "
+            f"{record_err}"
+        )
+        return None
+
+
+def _discover_text_artifacts_from_output_dir(output_dir, known_files=None):
+    if known_files is None:
+        print(
+            "worker-comfyui - Text artifact scan skipped; the output directory "
+            "was not recorded before the workflow ran."
+        )
+        return []
+
+    if not output_dir or not os.path.isdir(output_dir):
+        print(
+            "worker-comfyui - Text artifact scan skipped; output directory "
+            f"does not exist: {output_dir}"
+        )
+        return []
+
+    candidates = []
+    for file_path, stat_result in _iter_text_artifact_files(output_dir):
+        # As it was before the workflow ran: the file of an earlier job.
+        if known_files.get(file_path) == _text_artifact_state(stat_result):
+            continue
+
+        candidates.append((stat_result.st_mtime, file_path))
 
     candidates.sort(key=lambda item: (item[0], item[1]))
     if len(candidates) > TEXT_ARTIFACT_SCAN_MAX_FILES:
@@ -1520,7 +1596,7 @@ def collect_text_artifacts(
     outputs,
     job_id,
     output_dir=COMFY_OUTPUT_DIR,
-    min_mtime=None,
+    known_files=None,
     existing_file_items=None,
 ):
     text_outputs = {"files": [], "texts": []}
@@ -1529,7 +1605,7 @@ def collect_text_artifacts(
 
     artifacts = _discover_text_artifacts_from_history(outputs)
     artifacts.extend(_discover_inline_text_outputs_from_history(outputs))
-    artifacts.extend(_discover_text_artifacts_from_output_dir(output_dir, min_mtime))
+    artifacts.extend(_discover_text_artifacts_from_output_dir(output_dir, known_files))
 
     if not artifacts:
         print("worker-comfyui - No text artifacts discovered.")
@@ -1898,7 +1974,7 @@ def handler(job):
     ws = None
     client_id = str(uuid.uuid4())
     prompt_id = None
-    job_started_at = None
+    known_text_files = None
     output_media = {"images": [], "videos": [], "audio": [], "files": [], "texts": []}
     errors = []
     comfy_credits = {"available": False, "credits_spent": None, "details": []}
@@ -1916,10 +1992,11 @@ def handler(job):
         ws.connect(ws_url, timeout=10)
         print(f"worker-comfyui - Websocket connected")
 
+        known_text_files = snapshot_text_artifacts(COMFY_OUTPUT_DIR)
+
         # Queue the workflow
         try:
             # Pass per-request API key if provided in input
-            job_started_at = time.time()
             queued_workflow = queue_workflow(
                 workflow,
                 client_id,
@@ -2106,7 +2183,7 @@ def handler(job):
             outputs,
             job_id,
             output_dir=COMFY_OUTPUT_DIR,
-            min_mtime=job_started_at,
+            known_files=known_text_files,
             existing_file_items=output_media.get("files", []),
         )
         errors.extend(text_errors)
