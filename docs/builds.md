@@ -144,7 +144,29 @@ repository's at `d97d8d7`, and its Python packages are those of `v07`. Against
 answer, as the [job contract](handler-contract.md) describes it. The log filter
 is that of `v05`.
 
-Not known here: what was checked on this tag before it was pushed.
+Checked on a workstation before the push, in the container without a GPU. This
+part was added on 2026-10-10 from the notes of the session that built the tag,
+from `main` at `f0de487`, the merge of `d97d8d7`:
+
+- Jobs sent one after another through the image's own handler, with real
+  ComfyUI and core nodes only (`SaveImageTextDataSetToFolder` writes a caption
+  file and reports nothing). The caption job gets its own caption, the image
+  job right after it gets nothing of it, a file written again at the same size
+  comes back as the later job wrote it, and a job behind a graph that ComfyUI
+  was still running gets nothing of that graph. `v05` answers the last three
+  with another job's text.
+- The handler, `start.sh`, the filter, `credit_estimator.py` and
+  `network_volume.py` in the image are the repository's at `f0de487`, and the
+  135 Python packages are those of `v05`.
+- The service's 115 unit and contract tests pass in the image.
+- The 43 graph variants of the 32 AZ-AI provider and region models, and the
+  seven jobs read by the AZ-AI backend's validator, as for `v03`, with no
+  signed link in the worker's log.
+- The filter's probe, as for `v05`: six links cut, the filter still running
+  after INT, TERM and HUP, the container refusing to start with a filter that
+  cannot run, and the links whole with `COMFY_LOG_REDACT=false`.
+
+Not checked: a RunPod endpoint, and a provider job on this tag.
 
 Known in `v06`: what is known in `v05` about a filter that is ended with KILL.
 
